@@ -1,0 +1,10 @@
+Package: biomvRCNS
+Type: Package
+Title: Copy Number analysis and Segmentaion models for multivariate Bio data.
+Version: 1.0
+Date: 2013-02-12
+Author: Yang Du
+Maintainer: Yang Du <duyang@fbn-dummerstorf.de>
+Description: In this package, a Hidden Semi Markov Model and one segmentation based model are designed and implemeted for genomic data, with the aim of assisting in transcripts detection using high throughput techology like RNA-seq or tiling array, and copy number analyisis using arrary based CGH or targeted sequencing.
+License: GPL (>= 2)
+Depends: methods, IRanges, GenomicRanges, Gviz
