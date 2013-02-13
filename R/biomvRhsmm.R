@@ -5,7 +5,7 @@
 ##################################################
 # re-implement HSMM, one more slot to handle distance array
 ##################################################
-biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnno=NULL, soj.type='gamma', emis.type='norm', q.alpha=0.05, r.var=0.75, iterative=TRUE, maxit=1000, tol=1e-04, grp=NULL, clusterm=NULL){
+biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnno=NULL, soj.type='gamma', emis.type='norm', q.alpha=0.05, r.var=0.75, iterative=TRUE, maxit=1000, tol=1e-04, grp=NULL, clusterm=NULL, na.rm=TRUE){
 	## input checking
 	# x, matrix/range like
 	# xPos, x feature information if x is not a grange object; so for count data, x should be a GRange , for other continous data, a matrix /  Grange
@@ -122,7 +122,7 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnn
 					emis$mu <- estEmisMu(x[,c], J, q.alpha=q.alpha)
 					emis$var <- estEmisVar(x[,c], J, r.var=r.var)
 				} else if (emis$type == 'pois'){
-					emis$lambda  <- estEmisMu(x[,c], J, q.alpha=0.05)
+					emis$lambda  <- estEmisMu(x[,c], J, q.alpha=q.alpha)
 				}
 				#estimation of most likely state sequence
 				# switch est.method   viterbi , .C /  smooth
@@ -376,7 +376,7 @@ sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){
 	return(soj)
 }
 
-initDposV<-function(xpos, maxbp, xmax= .Machine$double.xmax ){
+initDposV<-function(xpos, maxbp){
 	# for each position, find the maxk
 	nr<-length(xpos)
 	maxbpidx<-sapply(1:nr, function(i) max(which(xpos[i]+maxbp >= xpos)))
@@ -384,11 +384,11 @@ initDposV<-function(xpos, maxbp, xmax= .Machine$double.xmax ){
 	maxk<-max(maxbpidx - seq_len(nr))+1
 	# initialize the maxk position list for each position
 	## option 2, a TM * J matrix
-	dposV<-c(sapply(1:nr, function(t) xpos[t:(t+maxk-1)]-xpos[t])) # dposV[(t-1)*maxk+u]
+	dposV<-c(sapply(1:nr, function(t) xpos[t:(t+maxk-1)]-xpos[t]))+1 # dposV[(t-1)*maxk+u]
 	#dposV[1]<-.Machine$double.eps # this will not ensure a 1 for the first position after the dgamma call.
 	# sub > maxbp and NA
 	dposV[which(dposV>maxbp)]<-NA
-	dposV[is.na(dposV)]<-xmax # for those positions exceed maxbp, this works fine
+	dposV[is.na(dposV)]<-.Machine$double.xmax # for those positions exceed maxbp, this works fine #fixme, now there is another problem in b/f algo, the xmax will make the reestimation of soj$d difficult...
 	return(list(dposV=dposV, maxk=maxk))
 }
 
@@ -408,6 +408,7 @@ initSojDd <- function(soj, B=NULL) {
 		## here d for all positions should be aggregated within each J
 		dposV<-soj$dposV
 	}
+	idx<-dposV != .Machine$double.xmax
 	nb <- length(dposV)/maxk
 	if(soj$type == "gamma") {
 		if(!is.null(B)){
@@ -415,7 +416,7 @@ initSojDd <- function(soj, B=NULL) {
 			soj$d <- matrix(B$eta+.Machine$double.eps,ncol=J)
 			soj$shape <- soj$scale <- numeric(J)
 			for(j in 1:J) {           
-				param <- gammafit(dposV,wt=soj$d[,j])
+				param <- gammafit(dposV[idx],wt=soj$d[idx,j])
 				soj$shape[j] <- param$shape
 				soj$scale[j] <- param$scale     	  
 			}
