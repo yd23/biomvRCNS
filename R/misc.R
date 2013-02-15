@@ -212,7 +212,7 @@ maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, 
 # helper function to split far away neighbouring items
 ##################################################
 splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xpos=NULL, xrange=NULL, maxgap=NULL, minrun=1){
-	if(!is.null(xrange) ) xpos<-NULL
+	if(!is.null(xrange) && class(xrange)=='GRanges' || class(xrange)== 'IRanges') xpos<-NULL
 	if(!is.null(xpos) || !is.null(xrange) && !is.null(intStart) && !is.null(intEnd) && length(intEnd)==length(intStart)){
 		if(!is.null(xpos)){
 			n<-length(xpos)

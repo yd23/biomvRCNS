@@ -6,13 +6,21 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', grp=NULL, penalty=
 	if (is.null(family) || (family != 'norm' && family != 'pois' && family != 'nbinom')) 
     	stop("'family' must be specified, currently only 'norm' ,'pois' and 'nbinom' are supported !")
 	
-	if (!is.numeric(x) || !(is.vector(x) || is.matrix(x))) 
-        stop("'x' must be a numeric vector or matrix.")
+	if (!is.numeric(x) || !(is.vector(x) || is.matrix(x)) || class(x)=='GRanges') 
+        stop("'x' must be a numeric vector or matrix or a GRanges object.")
+    if(class(x)=='GRanges') {
+    	xid<-names(values(x))
+    	xRange<-ranges(x)
+    	x<-as.matrix(values(x))
+    }    
 	if(length(dim(x))==2){
-		x<-matrix(as.numeric(unlist(x), use.names=F), dim(x)[1], dim(x)[2])
+		xid<-colnames(x)
+		x<-as.matrix(x)
 	} else {
 		warning('no dim attributes, coercing x to a matrix with 1 column !!!')
 		x <- matrix(as.numeric(x), ncol=1)
+		xid<-paste('S', seq_len(nc), sep='')
+		colnames(x)<-xid
 	}
 	nr<-nrow(x)
 	nc<-ncol(x)
@@ -34,6 +42,7 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', grp=NULL, penalty=
     if(penalty=='SIC') penalty='BIC' 
     
     # check grp setting, cluster if needed, otherwise treat as one group	
+   	if(!is.null(grp)) grp<-as.character(grp)
 	grp<-preClustGrp(x, grp=grp, clusterm=clusterm)
 	
 	## initialize the output vectors
