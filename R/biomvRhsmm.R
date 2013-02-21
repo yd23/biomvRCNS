@@ -201,7 +201,7 @@ biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alph
 		B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
 				  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
 				  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
-				  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J), PACKAGE='biomvRCNS')
+				  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='biomvRCNS')
 
 		#check gamma and eta
 #		if(any(is.nan(B$L))) {
