@@ -1,14 +1,11 @@
 useDynLib(biomvRCNS, .registration = TRUE)
 
 import(IRanges,GenomicRanges, Gviz, mvtnorm)
-importFrom(dynamicTreeCut, cutreeDynamic)
-importFrom(commonCondLogLikDerDelta, edgeR)
 
 export(
-	biomvRhsmm, biomvRseg, maxgapminrun,
-	regionSegCost, regionSegAlphaNB,
-	biomvRplot, bioMvRGviz,
-	simuAnno, sojournAnno, simMvSegData, splitFarNeighbour
+	biomvRhsmm, biomvRhsmmRun, sojournAnno,
+	biomvRseg, regionSegCost, regionSegAlphaNB,
+	biomvRGviz, maxgapminrun, splitFarNeighbour
 )
 
 exportMethods(
@@ -16,8 +13,7 @@ exportMethods(
     "show" 
 )
 exportClasses(
-    "biomvRhsmm",
-     "biomvRseg" 
+	"biomvRCNS"
 )
 
 

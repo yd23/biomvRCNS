@@ -1,40 +1,62 @@
 ## main function for normized numeric intensity vectors
-biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', grp=NULL, penalty='BIC', clusterm=NULL, twoStep=TRUE, segDisp=FALSE, useMC=FALSE, useSum=TRUE, comVar=TRUE){
+biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NULL, usePos='start', family='norm', penalty='BIC', twoStep=TRUE, segDisp=FALSE, useMC=FALSE, useSum=TRUE, comVar=TRUE, maxgap=Inf, tol=1e-06, grp=NULL, clusterm=NULL, na.rm=TRUE){
+	
 	# input to the main function is a matrix object, x, features on the same strand and same chr
 	# optional grouping factor, length of which should be the same as the column of x
 	# input checking and preparion
 	if (is.null(family) || (family != 'norm' && family != 'pois' && family != 'nbinom')) 
     	stop("'family' must be specified, currently only 'norm' ,'pois' and 'nbinom' are supported !")
 	
-	if (!is.numeric(x) || !(is.vector(x) || is.matrix(x)) || class(x)=='GRanges') 
+	if (!is.numeric(x) &&  !is.matrix(x) && class(x)!='GRanges') 
         stop("'x' must be a numeric vector or matrix or a GRanges object.")
     if(class(x)=='GRanges') {
     	xid<-names(values(x))
-    	xRange<-ranges(x)
+    	xRange<-x
+    	mcols(xRange)<-NULL
     	x<-as.matrix(values(x))
-    }    
-	if(length(dim(x))==2){
+    } else if(length(dim(x))==2){
 		xid<-colnames(x)
 		x<-as.matrix(x)
 	} else {
-		warning('no dim attributes, coercing x to a matrix with 1 column !!!')
+		warning('No dim attributes, coercing x to a matrix with 1 column !!!')
 		x <- matrix(as.numeric(x), ncol=1)
 		xid<-paste('S', seq_len(nc), sep='')
 		colnames(x)<-xid
 	}
-	nr<-nrow(x)
+	nr<-nrow(x) 
 	nc<-ncol(x)
 	
-	if (is.null(maxseg) || !is.numeric(maxseg) || (length(maxseg) != 1) || (maxk <= 1) ||  (maxk > nr)) 
+	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
+	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
+		if(usePos=='start'){
+			xPos<-start(xRange)
+		} else if(usePos=='end'){
+			xPos<-end(xRange)
+		} else {
+			xPos<-(start(xRange)+end(xRange))/2
+		}
+	} else {
+		# no valid xRange, set it to null
+		warning('No valid xRange and usePos found, re-check if you have specified xRange / usePos.')
+		xRange<- NULL
+	} 
+	if (is.null(xPos) || !is.numeric(xPos) || length(xPos)!=nr){
+		warnings("No valid positional information found. Re-check if you have specified any xPos / xRange.")
+		xPos<-NULL
+	}
+	if (!is.null(maxbp) && (!is.numeric(maxbp) || (length(maxbp) != 1) || (maxbp <= 1) ||  ( !is.null(xPos) && maxbp > max(xPos,na.rm=na.rm)-min(xPos, na.rm=na.rm)))) 
+	 	 stop(sprintf("'maxbp' must be a single integer between 2 and the maximum length of the region if xPos is avaliable."))	 
+	
+	# checking on maxseg and maxk
+	if (is.null(maxseg) || !is.numeric(maxseg) || (length(maxseg) != 1) || (maxseg <= 1) ||  (maxseg > nr)) 
 		 stop(sprintf("'maxseg' must be a single integer between 2 and the number of rows of 'x': %d.", nr))
 	maxseg<-as.integer(maxseg) # this is the number for initial candidate region
- 	
-	 if (is.null(maxk) || !is.numeric(maxk) || (length(maxk) != 1) || (maxk <= 1) ||  (maxk > nr)) 
-	 	 stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d.", nr))
+	if (is.null(maxbp) && (is.null(maxk) || !is.numeric(maxk) || (length(maxk) != 1) || (maxk <= 1) ||  (maxk > nr))) 
+	 	 stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d, if maxbp is not avaliable.", nr))
 	maxk<-as.integer(maxk) # this is the maximal windows size for the initial segmentation
-	
-	if(maxk*maxseg<nr) 
-		stop(sprintf("the product of 'maxseg' and 'maxk' is smaller than the number of rows of 'x': %d.", nr))
+	# fixme, this check may not be necessary, since nr might be a sum of multiple seq
+#	if(maxk*maxseg<nr) 
+#		stop(sprintf("the product of 'maxseg' and 'maxk' is smaller than the number of rows of 'x': %d.", nr))
 
     # penalty
     penaltymethods<-c('none','AIC','AICc','BIC','SIC','HQIC')
@@ -45,132 +67,179 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', grp=NULL, penalty=
    	if(!is.null(grp)) grp<-as.character(grp)
 	grp<-preClustGrp(x, grp=grp, clusterm=clusterm)
 	
+	
+	## build xRange if not a GRanges for the returning object
+	if(is.null(xRange) || class(xRange) != 'GRanges'){
+		if(!is.null(xRange) && class(xRange) == 'IRanges'){
+			xRange<-GRanges(seqnames='sampleseq', xRange)	
+		} else 	if(!is.null(xPos)){
+			xRange<-GRanges(seqnames='sampleseq', IRanges(start=xPos, width=1))	
+		} else {
+			xRange<-GRanges(seqnames='sampleseq', IRanges(start=seq_len(nr), width=1))	
+		}
+	}
+	# get seqnames status	
+	seqs<-unique(as.character(seqnames(xRange)))
+	
 	## initialize the output vectors
 	segStart <- vector(mode="list", length=nc)
 	segMean <- vector(mode="list", length=nc)
-	## start the initial segmetation within each grp
-	for(g in unique(grp)){
-		cat(sprintf("step 1 segmentation for group %s\n", g))
-		d<-sum(grp==g)
-		## construct costmatrix, family wise
-		if(family=='nbinom'){
-			if (segDisp){
-				alpha<-regionSegAlphaNB(x[,which(grp==g)], maxk=maxk, useMC=useMC)
+	res<-GRanges(); #seqlevels(res)<-seqlevels(xRange)
+	
+	tmaxk<-maxk
+	# we have more than one seq to batch
+	for(s in seq_along(seqs)){
+		cat(sprintf("Processing sequence %s\n", seqs[s]))
+		r<-which(as.character(seqnames(xRange)) == seqs[s])
+		
+		## update local maxk, if maxbp and xPos/xRange are given / or check if maxk is too large for current seq
+		maxk<-tmaxk
+		if(!is.null(maxbp) && !is.null(xPos) ){
+			maxbpidx<-sapply(r, function(i) max(which(xPos[i]+maxbp >= xPos[r])))
+			# find the maxk idx
+			smaxk<-max(maxbpidx - seq_along(r))+1
+			maxk<-smaxk
+		} else if(maxk>length(r)){
+			maxk<-length(r)
+		}	
+		
+		for(g in unique(grp)){
+			cat(sprintf("Step 1 building segmetation model for group %s\n", g))
+			gi<-grp==g
+			d<-sum(gi)
+			if(family=='nbinom'){
+				if (segDisp){
+					alpha<-regionSegAlphaNB(x[r,gi], maxk=maxk, useMC=useMC, tol=tol)
+				} else {
+					dispersion<-estimateSegCommonDisp(x[r,gi])
+					alpha<-matrix(dispersion, maxk, sum(r))
+				}
+				C<-regionSegCost(x[r,gi], maxk=maxk, family=family, alpha=alpha, useSum=useSum, useMC=useMC)
 			} else {
-				dispersion<-estimateSegCommonDisp(x[,which(grp==g)])
-				alpha<-matrix(dispersion, maxk, nr)
+				C<-regionSegCost(x[r,gi], maxk=maxk, family=family, useSum=useSum, comVar=comVar)
 			}
-			C<-regionSegCost(x[,which(grp==g)], maxk=maxk, family=family, alpha=alpha, useSum=useSum, useMC=useMC)
-		} else {
-			C<-regionSegCost(x[,which(grp==g)], maxk=maxk, family=family, useSum=useSum, comVar=comVar)
-		}
-#		Res<-.Call("univaRseg", C, maxseg,  PACKAGE = "biomvCNS")
-		Res<- .C("univaRseg", as.double(C), as.integer(maxseg), as.integer(maxk), as.integer(nr), cost=double(maxseg*nr), pos=integer((maxseg-1)*nr), minC=double(maxseg), segS=integer(maxseg*maxseg))#, PACKAGE = "biomvRCNS")
-		#Res$minC, mincost for each number of changepoint option
-		#Res$segS, the start position of each segment, 1 excluded and n+1 asserted
-
-		if( family== 'norm'){
-			# norm
-			#logL<- -nr/2*(1+log(2*pi)+log(Res$minC/nr)) # in tilingArray is a mixture of common and change variance
-			if(comVar){
-				logL<- -nr/2*(d+d*log(2*pi)+log(Res$minC/nr)) # the likelihood ratio cost, p104
+			Res<- .C("univaRseg", as.double(C), as.integer(maxseg), as.integer(maxk), as.integer(length(r)), cost=double(maxseg*length(r)), pos=integer((maxseg-1)*length(r)), minC=double(maxseg), segS=integer(maxseg*maxseg), PACKAGE = "biomvRCNS")
+		
+			if( family== 'norm'){
+				# norm
+				#logL<- -nr/2*(1+log(2*pi)+log(Res$minC/nr)) # in tilingArray is a mixture of common and change variance
+				if(comVar){
+					logL<- -length(r)/2*(d+d*log(2*pi)+log(Res$minC/length(r))) # the likelihood ratio cost, p104
+				} else {
+					logL<- -(length(r)+length(r)*d*log(2*pi)+Res$minC)/2 # the likelihood ratio cost, p134
+				}
 			} else {
-				logL<- -(nr+nr*d*log(2*pi)+Res$minC)/2 # the likelihood ratio cost, p134
+				# pois and nb
+				logL<- 0-Res$minC
 			}
-		} else {
-			# pois and nb
-			logL<- 0-Res$minC
-		}
+			if(family=='pois'){
+				nP<-seq_len(maxseg)*2-1
+			} else if ( (family=='nbinom' && !segDisp) || (family=='norm' && comVar && useSum)){
+				nP<-seq_len(maxseg)*2
+			} else if ( (family=='nbinom' && segDisp) || (family=='norm' && !comVar && useSum)) {
+				nP<-seq_len(maxseg)*3-1
+			} else if ( family=='norm' && comVar && !useSum) {
+				nP<-(seq_len(maxseg)+1)*(d+1)-2
+			} else if ( family=='norm' && !comVar && !useSum) {
+				nP<-seq_len(maxseg)*d*2+seq_len(maxseg)-1
+			}
+			#	BICpenalty = -0.5*sum(log(nTotalWindow)) - nCpts*log(length(combX)) + 0.5*log(nTotal)
+			#	mBIC = lik1-lik0+BICpenalty
+			# the optimal number of final segments for series within this group
+			rN<-switch(penalty,
+				none = which.max(logL),
+				AIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x])),
+				AICc = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*(nP[x]+1)/(length(r)*d-nP[x]-1))),
+				BIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+nP[x]*log(length(r)*d))),
+#fixme 				mBIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+nP[x]*log(length(r)*d))),
+				HQIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*log(log(length(r)*d)))),
+				stop('Invalid value argument for penalty'))	
+			cat(sprintf("Step 1 building segmetation model for group %s complete\n", g))
 		
-		# number of parameters are different, pois has only 1 for each segment, whereas norm and NB both have two
-		# for norm, comVar=T, useSum=T, (s-1)*pos + s*mean + 1*sd = 2s
-		# for norm, comVar=F, useSum=T, (s-1)*pos + s*mean + s*sd = 3s-1
-		# for norm, comVar=T, useSum=F, (s-1)*pos + s*d*mean + 1*d*sd = (s+1)(d+1)-2
-		# for norm, comVar=F, useSum=F, (s-1)*pos + s*d*mean + s*d*sd = 2*s*d+s-1 
-		# for pois, (s-1)*pos + s*mean=2s-1
-		# for NB, segDisp=T, (s-1)*pos + s*mean + s*alpha = 3s-1
-		# for NB, segDisp=F, (s-1)*pos + s*mean + 1*alpha = 2s
-		
-		if(family=='pois'){
-			nP<-seq_len(maxseg)*2-1
-		} else if ( (family=='nbinom' && !segDisp) || (family=='norm' && comVar && useSum)){
-			nP<-seq_len(maxseg)*2
-		} else if ( (family=='nbinom' && segDisp) || (family=='norm' && !comVar && useSum)) {
-			nP<-seq_len(maxseg)*3-1
-		} else if ( family=='norm' && comVar && !useSum) {
-			nP<-(seq_len(maxseg)+1)*(d+1)-2
-		} else if ( family=='norm' && !comVar && !useSum) {
-			nP<-seq_len(maxseg)*d*2+seq_len(maxseg)-1
-		}
-		
-#	BICpenalty = -0.5*sum(log(nTotalWindow)) - nCpts*log(length(combX)) + 0.5*log(nTotal)
-#	mBIC = lik1-lik0+BICpenalty
+			#rN could be supplied by the user, thus only keeping the initial segment candidate
+			for(c in which(gi)){
+				## here add checking whether a 2nd step is needed
+				if(d==1 || !twoStep || rN==maxseg){
+					## no need to do 2nd step
+					rIdx<-c(mat2list(Res$segS, maxseg)[[rN]])
+					j<-r[c(1,rIdx)] # col, segStart
+					i<-r[c(rIdx-1, length(r))] # segEnd
+					k<-i-j+1 # row for C and alpha matrix
+				
+					segStart[[c]]<-r[rIdx]
+					segMean[[c]]<-sapply(seq_len(rN), function(z) mean(x[i[z]:j[z],c]))
+										
+					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xrange=ranges(xRange), maxgap=maxgap)
+					tores<-GRanges(seqnames=as.character(seqs[s]), 
+						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)), 
+						SAMPLE=rep(xid[c], each=length(Ilist$IS)), 
+						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(r) apply(as.matrix(x[Ilist$IS[r]:Ilist$IE[r],c]), 2, mean, na.rm=na.rm)))
+					)
+					mcols(tores)<-DataFrame(values(tores), STATE=sapply(1:length(tores), function(i) ifelse(values(tores)[i, 'MEAN']>mean(x[r,c], na.rm=na.rm), 'HIGH', 'LOW')), row.names = NULL)
+					res<-c(res, tores)
+					cat(sprintf("No need to run step 2 merging, processing complete for column %s from group %s\n", c, g))
+					
+				} else {
+					cat(sprintf("Step 2 merging for column %s from group %s\n", c, g))
+					# to run a 2nd step merging
+					# get all candidates coordinates
+					rRegs<-mat2list(Res$segS, maxseg)[[maxseg]]	
+					# generate a regional cost for each series
+					if(family=='nbinom'){
+						if(segDisp){
+							ralpha<-regionSegAlphaNB(x[r,c], segs=rRegs, useMC=useMC, tol=tol)
+						} else {
+							ralpha=matrix(dispersion,maxseg, maxseg)
+						}
+						rC<-regionSegCost(x[r,c], segs=rRegs, family=family, alpha=ralpha, useSum=useSum, useMC=useMC) 
+					} else  {
+						rC<-regionSegCost(x[r,c], segs=rRegs, family=family, useSum=T, comVar=comVar)
+					}		
+					# use this regional cost to do dp merging
+	#				rRes<-.Call("univaRseg", rC , as.integer(rN),  PACKAGE = "biomvRCNS") # .call version
+					rRes<- .C("univaRseg", as.double(rC), as.integer(rN), as.integer(maxseg), as.integer(maxseg), cost=double(rN*maxseg), pos=integer((rN-1)*maxseg),minC=double(rN*maxseg), segS=integer(rN*rN), PACKAGE = "biomvRCNS") # .C version
 
-		
-		# the optimal number of final segments for series within this group
-		rN<-switch(penalty,
-			none = which.max(logL),
-			AIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x])),
-			AICc = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*(nP[x]+1)/(nr*d-nP[x]-1))),
-			BIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+nP[x]*log(nr*d))),
-			HQIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*log(log(nr*d)))),
-			stop('Invalid value argument for penalty'))	
-		cat(sprintf("Step 1 segmentation complete for group %s\n", g))
-		
-		#rN could be supplied by the user, thus only keeping the initial segment candidate
-		
-		# now apply individually for each serie within this group
-		for(c in which(grp==g)){
-			## here add checking whether a 2nd step is needed
-			if(d==1 || !twoStep || rN==maxseg){
-				cat(sprintf("No need to run step 2 merging for column %s from group %s\n", c, g))
-				## no need to do 2nd step
-				rIdx<-c(mat2list(Res$segS, maxseg)[[rN]])
-				j<-c(1,rIdx) # col, segStart
-				i<-c(rIdx-1, nr) # segEnd
-				k<-  i - j+1 # row for C and alpha matrix
+					rIdx<-mat2list(rRes$segS, rN)[[rN]]
+					j<-r[c(1,rRegs[rIdx-1])] # col, segStart, original index, including 1
+					i<-r[c(rRegs[rIdx-1]-1, length(r))] # segEnd, original index
 				
-				segStart[[c]]<-rIdx
-				segMean[[c]]<-sapply(seq_len(rN), function(z) mean(x[i[z]:j[z],c]))
-				cat(sprintf("Processing complete for column %s from group %s\n", c, g))
-			} else {
-				cat(sprintf("Step 2 merging for column %s from group %s\n", c, g))
-				# to run a 2nd step merging
-				# get all candidates coordinates
-				rRegs<-mat2list(Res$segS, maxseg)[[maxseg]]	
-				# generate a regional cost for each series
-				if(family=='nbinom'){
-					if(segDisp){
-						ralpha<-regionSegAlphaNB(x[,c], segs=rRegs, useMC=useMC)
-					} else {
-						ralpha=matrix(dispersion,maxseg, maxseg)
-					}
-					rC<-regionSegCost(x[,c], segs=rRegs, family=family, alpha=ralpha, useSum=useSum, useMC=useMC) 
-				} else  {
-					rC<-regionSegCost(x[,c], segs=rRegs, family=family, useSum=T, comVar=comVar)
-				}		
-				# use this regional cost to do dp merging
-#				rRes<-.Call("univaRseg", rC , as.integer(rN),  PACKAGE = "biomvRCNS")
-				rRes<- .C("univaRseg", as.double(rC), as.integer(rN), as.integer(maxseg), as.integer(maxseg), cost=double(rN*maxseg), pos=integer((rN-1)*maxseg),minC=double(rN*maxseg), segS=integer(rN*rN))#, PACKAGE = "biomvRCNS")
-				
-				rIdx<-mat2list(rRes$segS, rN)[[rN]]
-				j<-c(1,rRegs[rIdx-1]) # col, segStart, original index, including 1
-				i<-c(rRegs[rIdx-1]-1, nr) # segEnd, original index
-				
-				# the result here need to be put into the final returning value
-				segStart[[c]]<-rRegs[rIdx-1]				
-				segMean[[c]]<-sapply(seq_len(rN), function(z) mean(x[i[z]:j[z],c]))	
-				cat(sprintf("Step 2 merging complete for column %s from group %s\n", c, g))
-			} # end 2nd step if
-		} # end c for
-	} # end g for
-	new("biomvRseg",
-    x = x,
-    segStart = segStart,
-    segMean = segMean,
-    group=as.integer(grp),
-	family=family)
+					# the result here need to be put into the final returning value
+					segStart[[c]]<-r[rRegs[rIdx-1]]			
+					segMean[[c]]<-sapply(seq_len(rN), function(z) mean(x[i[z]:j[z],c]))	
+					
+					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xrange=ranges(xRange), maxgap=maxgap)
+					tores<-GRanges(seqnames=as.character(seqs[s]), 
+						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)), 
+						SAMPLE=rep(xid[c], each=length(Ilist$IS)), 
+						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(r) apply(as.matrix(x[Ilist$IS[r]:Ilist$IE[r],c]), 2, mean, na.rm=na.rm)))
+					)
+					mcols(tores)<-DataFrame(values(tores), STATE=sapply(1:length(tores), function(i) ifelse(values(tores)[i, 'MEAN']>mean(x[r,c], na.rm=na.rm), 'HIGH', 'LOW')), row.names = NULL)
+					res<-c(res, tores)
+					cat(sprintf("Step 2 merging complete for column %s from group %s\n", c, g))
+				} # end 2nd step if
+			} # end c for
+			cat(sprintf("Building segmetation model for group %s complete\n", g))
+		} # end for g
+		cat(sprintf("Processing sequence %s complete\n", seqs[s]))
+	} # end for s
+
+#	new("biomvRseg",
+#    x = x,
+#    segStart = segStart,
+#    segMean = segMean,
+#    group=grp,
+#	family=family)
+
+	values(xRange)<-DataFrame(x,  row.names = NULL)
+	new("biomvRCNS",  
+		x = xRange, res = res,
+		param=list(maxk=tmaxk, maxseg=maxseg, maxbp=maxbp, family=family, penalty=penalty, group=grp, clusterm=clusterm, twoStep=twoStep, segDisp=segDisp, useMC=useMC, useSum=useSum, comVar=comVar, na.rm=na.rm, tol=tol)
+	)
+
 }
+
+
+
 
 
 
@@ -178,7 +247,7 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', grp=NULL, penalty=
 # segmentation utility functions
 ##################################################
 
-regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum=TRUE, useMC=FALSE, comVar=TRUE, naVal=.Machine$double.xmax){
+regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum=TRUE, useMC=FALSE, comVar=TRUE){
 	# the same cost function for both initial DP segmentation and 2nd DP merging
 	# segs, a vector of the starting index of each candiate region, except for the first position 1
 	# check input x, convert to vecter if necessary
@@ -202,6 +271,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
         }
     }
     n<-length(r)
+    naVal<-.Machine$double.xmax
     
     ## add a checking for useSum in norm models
     if(d==1 && !useSum){
@@ -213,7 +283,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
      if (is.null(segs)) {
      	if (is.null(maxk)){
      		# both not specified, offer a warning
-     		warning(sprintf("both 'maxk' and 'segs' are not specified, a full size %d x %d cost matrix would be generated.", n, n))
+     		warning(sprintf("Both 'maxk' and 'segs' are not specified, a full size %d x %d cost matrix would be generated.", n, n))
 			maxk<-n
      	} else {
      		# cost for the fisrt DP seg step
@@ -227,7 +297,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
     	N<-length(segs)+1
      	if (!is.null(maxk)){
      		# both specified, offer a warning
-     		warning(sprintf("both 'maxk' and 'segs' are specified, maxk would be overrided with lenth(segs)+1=%d", N))
+     		warning(sprintf("Both 'maxk' and 'segs' are specified, maxk would be overrided with lenth(segs)+1=%d", N))
      	}
      	maxk<-N 
      } else {
@@ -313,6 +383,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
 		}
 		#C[1,]<-NA ## experimental, to avoid consecutive changes, doesnot work well, and inf cause 
 		C<- -C
+		
     }  else { # for negative bionomial
     	if(all(alpha==0)){
     		C[, 1] <- sapply(k, function(z) NBlogL1stTerm(c(x[seq_len(e[z]),]), alpha[z,1])) + crss[k]*log(crss[k]/(sk[k]*d)) - log((1+alpha[,1]*crss[k]/(sk[k]*d))^(crss[k]+(sk[k]*d)/alpha[,1]))
@@ -356,7 +427,7 @@ NBlogL1stTerm<-function(x, alpha){
 }
 
 
-regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE){
+regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE, tol=1e-06){
 	# generate alpha matrix for NB model, in both steps of segmentation cost prep.
 	# segs, a vector of the starting index of each candiate region, except for the first position 1
 	# check input x, convert to vecter if necessary
@@ -371,12 +442,19 @@ regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE){
         r <- rowSums(x)
     }
     n<-length(r)
-    
+       
+   if(useMC & length(find.package('multicore', quiet=T))==0) {
+		warning("'multicore' is not found, use normal 'apply' function!!!")
+		useMC<-FALSE
+	} else if (useMC){
+		require(multicore)
+	}
+        
     ## check input parameter maxk and segs
      if (is.null(segs)) {
      	if (is.null(maxk)){
      		# both not specified, offer a warning
-     		warning("both 'maxk' and 'segs' are not specified, a full size n x n cost matrix would be generated.")
+     		warning("Both 'maxk' and 'segs' are not specified, a full size n x n cost matrix would be generated.")
 			maxk<-n
      	} else {
      		# cost for the fisrt DP seg step
@@ -390,7 +468,7 @@ regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE){
     	N<-length(segs)+1
      	if (!is.null(maxk)){
      		# both specified, offer a warning
-     		warning("both 'maxk' and 'segs' are specified, maxk would be overrided with lenth(segs)+1")
+     		warning("Both 'maxk' and 'segs' are specified, maxk would be overrided with lenth(segs)+1")
      	}
      	maxk<-N 
      } else {
@@ -425,12 +503,15 @@ regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE){
 estimateSegCommonDisp<-function(xSeg,tol=1e-06){
 	# function imported from edgeR
 	# xSeg is a matrix object or a vector
-		disp <- 0
-		for(i in 1:2) {
-			delta <- optimize(commonCondLogLikDerDelta, interval=c(1e-4,100/(100+1)), tol=tol, maximum=TRUE, y=list(xSeg), der=0, doSum=FALSE)
-			delta <- delta$maximum
-			disp <- delta/(1-delta)
-		}
-		disp
+#		disp <- 0
+#		for(i in 1:2) {
+#			delta <- optimize(commonCondLogLikDerDelta, interval=c(1e-4,100/(100+1)), tol=tol, maximum=TRUE, y=list(xSeg), der=0)
+#			delta <- delta$maximum
+#			disp <- delta/(1-delta)
+#		}
+#		disp
+		x<-as.numeric(xSeg)
+		wt<-rep(1, length(x))
+		nbinomCLLDD(x, wt, 0)$par[1]
 }
 
