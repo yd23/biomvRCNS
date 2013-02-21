@@ -1,5 +1,5 @@
 
-biomvRplot<-function(x, xMeta=NULL, xAnno=NULL, xGrp=NULL, xSeg=NULL, ftcol=c('green', 'cyan', 'tomato','purple','gold', 'violet'), main='bioMvCNS plot', ylab=expression(paste('Normalized ',italic("log"[2]*""), ' intensity', sep='')), width=12, height=10, ...){
+biomvRplot<-function(x, xMeta=NULL, xAnno=NULL, xGrp=NULL, xSeg=NULL, ftcol=c('green', 'cyan', 'tomato','purple','gold', 'violet'), main='biomvRCNS plot', ylab=expression(paste('Normalized ',italic("log"[2]*""), ' intensity', sep='')), width=12, height=10, ...){
 	# core function to plot a region, will provide a higher level wrapper to handle different chr and strand
 	# showing nc rows of profile, 1 row of annotation, and 1 for legend
 	# x, a matrix or a multivaRseg object,  same defination as for segmentation method
@@ -18,7 +18,7 @@ biomvRplot<-function(x, xMeta=NULL, xAnno=NULL, xGrp=NULL, xSeg=NULL, ftcol=c('g
 		warning('x is not a matrix, coercing to matrix with 1 column !!!')
 	 	x <- matrix(x, ncol=1)
 	} 
-	nc<-ncol(x)		# number of series 
+	nc<-ncol(x)		# number of series package.skeleton(name = "biomvRCNS", 
 	nr<-nrow(x)	#number of features
 
 	# check groups
@@ -119,6 +119,7 @@ biomvRplot<-function(x, xMeta=NULL, xAnno=NULL, xGrp=NULL, xSeg=NULL, ftcol=c('g
 		for(xi in xSeg[[i]]){
 			lines(rep(start(xMeta[xi]),2), ylim, col='grey')
 		}
+		#abline(v=start(xMeta[xSeg[[i]]]), col='grey')
 	}
 	
 	#plot  annotation @ nc+1 if there is any
@@ -165,30 +166,31 @@ biomvRplot<-function(x, xMeta=NULL, xAnno=NULL, xGrp=NULL, xSeg=NULL, ftcol=c('g
 
 
 
-biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID=NULL, seggr=NULL, plotstrand='b', eps=TRUE){
+biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID='regionID', seggr=NULL, plotstrand='*', eps=TRUE, showId=TRUE, ...){
 	# exprgr, probe info, with first data column as expression value
 	# gmgr,  related annotation data, optional, a TYPE mcol has to be there...fragile
 	# seggr, segmentation info, optional, a STATE mcol has to be there...fragile
 	# prange, a range to plot, optional, a reasonable region is strongly advisable.
 	#Ideogram track obviously is not avaliable for pig on UCSC
 	#ideoTrack <- IdeogramTrack(genome = "susScr3", chromosome = "chrX")
-	
+	options(ucscChromosomeNames=FALSE)
 	#check if there are more chrs, and no prange
-	if(length(unique(seqnames(exprgr)))>1 && is.null(prange)){
+	if(length(unique(as.character(seqnames(exprgr))))>1 && is.null(prange)){
 		stop("More than 1 chr in the Grange object, yet no plot region defined! ")
 	}
 	if(is.null(prange)){
-		prange<-c(seqnames(exprgr), floor(min(starts(exprgr))/1000)*1000, ceiling(max(ends(exprgr))/1000)*1000)
+		prange<-c(unique(as.character(seqnames(exprgr))), floor(min(start(exprgr))/1000)*1000, ceiling(max(end(exprgr))/1000)*1000)
 	}
+	if(! plotstrand %in% c('+', '-', '*')) stop("Invalid plotstrand parameter specified, must be one of '+' / '-' / '*' !")
 	# handle the color automatically according to gmgr and seggr
 	colors<-c('cyan', 'tomato', 'green','purple','gold', 'violet')
 	typecode<-NULL
 	if(!is.null(gmgr)){
+		if(length(unique(values(gmgr)[,'TYPE'])) > length(colors)) stop("There are too many unique levels in values(gmgr)[,'TYPE'], please re-check!")
 		typecode<-c(typecode,unique(values(gmgr)[,'TYPE']))
 	}
-	if(is.null(seggr)){
-#		seggr<-GRanges(seqnames = rep(seqnames(exprgr), 2), ranges = IRanges(start=rep(prange[,2], 2), end=rep(prange[,3], 2)), strand =c('+','-'), STATE=rep('STATE', 2)) 
-	} else {
+	if(!is.null(seggr)){
+		if(length(unique(values(seggr)[,'STATE'])) > length(colors)) stop("There are too many unique levels in values(seggr)[,'STATE'], please re-check!")
 		typecode<-unique(c(typecode, unique(values(seggr)[,'STATE'])))
 	}
 	if(!is.null(typecode)){
@@ -199,27 +201,30 @@ biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID=NULL, seggr=NULL, 
 		params<-list()
 	}
 	
-	main<-paste(ifelse(is.null(regionID), 'region', gene), '@', prange[1], '.', prange[2],'-', prange[3], sep='')
+	if(hasArg(ylab))  ylab <- list(...)$ylab else ylab<-NULL
+	if(hasArg(main))  main <- list(...)$main else main<-NULL
+	
+	if(is.null(main))	main<-paste(regionID, '@', prange[1], '.', prange[2],'-', prange[3], '@', colnames(mcols(exprgr)),  sep='')
 	trackList<-list()
 		
 	# datatrack + 
-	if(plotstrand == '+' | plotstrand == 'b'){
-	
-		dpTrack <- DataTrack(exprgr[seqnames(exprgr)==prange[1] & strand(exprgr)=='+' & start(exprgr) >= prange[2] & end(exprgr) <= prange[3]],  name = paste(prange[1], '@+', sep=''), background.title = "darkblue", type = c('p'),  legend = TRUE)				
+	if(plotstrand == '+' | plotstrand == '*'){
+		if(is.null(ylab)) ylab<-paste('E@+', sep='') else ylab<-paste(ylab, '@+', sep='')
+		dpTrack <- DataTrack(exprgr[seqnames(exprgr)==prange[1] & (strand(exprgr)=='+' | strand(exprgr)=='*') & start(exprgr) >= as.numeric(prange[2]) & end(exprgr) <= as.numeric(prange[3])],  name = ylab, background.title = "darkblue", type = c('p'),  legend = TRUE)				
 		trackList<-append(trackList, dpTrack)
 		if(!is.null(seggr)){
 			# segmentation + as a seprate state annotation
 			# no id, with legend
-			segp<-seggr[seqnames(seggr)==prange[1] & strand(seggr)=='+' & start(seggr) >= prange[2] & end(seggr) <= prange[3]]
-			spTrack<- AnnotationTrack(segp,  name=paste('Seg', '@+', sep=''), background.title = "Gray", background.panel = "#FFFFFF", showId = FALSE, shape = "box")
+			segp<-seggr[seqnames(seggr)==prange[1] & (strand(seggr)=='+' | strand(seggr)=='*') & start(seggr) >= as.numeric(prange[2]) & end(seggr) <= as.numeric(prange[3])]
+			spTrack<- AnnotationTrack(segp,  name=paste('S', '@+', sep=''), id=values(segp)[,'STATE'] ,background.title = "Gray", background.panel = "#FFFFFF", showFeatureId = showId, shape = "box")
 			feature(spTrack)<- values(segp)[,'STATE']
 			trackList<-append(trackList, spTrack)
 		}
 		
 		if(!is.null(gmgr)){
 			# annodat track +
-			gmp<-gmgr[seqnames(gmgr)==prange[1] & strand(gmgr)=='+' & start(gmgr) >= prange[2] & end(gmgr) <= prange[3]]
-			apTrack<- AnnotationTrack(gmp, group=names(gmp), name=ifelse(length(gmp)==0, '', paste('G.M.', '@+', sep='')), background.title = "brown", background.panel = "#FFFEDB", showId = TRUE, shape = "box")
+			gmp<-gmgr[seqnames(gmgr)==prange[1] & (strand(gmgr)=='+' | strand(gmgr)=='*') & start(gmgr) >= as.numeric(prange[2]) & end(gmgr) <= as.numeric(prange[3])]
+			apTrack<- AnnotationTrack(gmp, group=names(gmp), name=ifelse(length(gmp)==0, '', paste('G', '@+', sep='')), background.title = "brown", background.panel = "#FFFEDB", showId = showId, shape = "box")
 			feature(apTrack)<- values(gmp)[,'TYPE'] ## this is a strong requirement
 			trackList<-append(trackList, apTrack)
 			rm(gmp)
@@ -230,11 +235,11 @@ biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID=NULL, seggr=NULL, 
 	axisTrack <- GenomeAxisTrack(add53 = TRUE, add35 = TRUE, littleTicks = TRUE)
 	trackList<-append(trackList, axisTrack)
 	
-	if(plotstrand == '-' | plotstrand == 'b'){			
+	if(plotstrand == '-' | plotstrand == '*'){			
 		if(!is.null(gmgr)){
 			# annodat track -
-			gmm<-gmgr[seqnames(gmgr)==prange[1] & strand(gmgr)=='-' & start(gmgr) >= prange[2] & end(gmgr) <= prange[3]]
-			amTrack <- AnnotationTrack(gmm, group=names(gmm), name=ifelse(length(gmm)==0, '', paste('G.M.', '@-', sep='')), background.title = "brown", background.panel = "#FFFEDB", showId = TRUE, shape = "box")
+			gmm<-gmgr[seqnames(gmgr)==prange[1] & (strand(gmgr)=='-' | strand(gmgr)=='*') & start(gmgr) >= as.numeric(prange[2]) & end(gmgr) <= as.numeric(prange[3])]
+			amTrack <- AnnotationTrack(gmm, group=names(gmm), name=ifelse(length(gmm)==0, '', paste('G', '@-', sep='')), background.title = "brown", background.panel = "#FFFEDB", showId = showId, shape = "box")
 			feature(amTrack)<- values(gmm)[,'TYPE']
 			trackList<-append(trackList, amTrack)
 			rm(gmm)
@@ -242,13 +247,14 @@ biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID=NULL, seggr=NULL, 
 		if(!is.null(seggr)){
 			# segmentation + as a seprate state annotation
 			# no id, with legend
-			segm<-seggr[seqnames(seggr)==prange[1] & strand(seggr)=='-' & start(seggr) >= prange[2] & end(seggr) <= prange[3]]
-			smTrack<- AnnotationTrack(segm,  name=paste('Seg', '@-', sep=''), background.title = "Gray", background.panel = "#FFFFFF", showId = FALSE, shape = "box")
+			segm<-seggr[seqnames(seggr)==prange[1] &  (strand(seggr)=='-' | strand(seggr)=='*')  & start(seggr) >= as.numeric(prange[2]) & end(seggr) <= as.numeric(prange[3])]
+			smTrack<- AnnotationTrack(segm,  name=paste('S', '@-', sep=''),  id=values(segm)[,'STATE'], background.title = "Gray", background.panel = "#FFFFFF", showFeatureId = showId, shape = "box")
 			feature(smTrack)<- values(segm)[,'STATE']
 			trackList<-append(trackList, smTrack)
 		}
 		#datatrack - 
-		dmTrack <- DataTrack(exprgr[seqnames(exprgr)==prange[1] & strand(exprgr)=='-' & start(exprgr) >= prange[2] & end(exprgr) <= prange[3]], name = paste(prange[1], '@-', sep=''), background.title = "darkblue", type = c('p'),   legend = TRUE)
+		if(is.null(ylab)) ylab<-paste('E@-', sep='') else ylab<-paste(ylab, '@-', sep='')
+		dmTrack <- DataTrack(exprgr[seqnames(exprgr)==prange[1] & (strand(exprgr)=='-' | strand(exprgr)=='*') & start(exprgr) >= as.numeric(prange[2]) & end(exprgr) <= as.numeric(prange[3])], name = ylab, background.title = "darkblue", type = c('p'),   legend = TRUE)
 		trackList<-append(trackList, dmTrack)	
 	}
 
@@ -257,9 +263,9 @@ biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID=NULL, seggr=NULL, 
 	graphics.off()
 	if(eps){
 		setEPS()
-		postscript(paste(main, '.', colnames(mcols(exprgr)), '.', plotstrand,'.eps', sep=''), paper='special', width=25, height=10, horizontal=F, fonts=c("sans"))
+		postscript(paste(main, '.', plotstrand,'.eps', sep=''), paper='special', width=25, height=10, horizontal=F, fonts=c("sans"))
 	} else {
-		pdf(paste(main, '.', colnames(mcols(exprgr)), '.', plotstrand, '.pdf', sep=''), width=25, height=10)
+		pdf(paste(main, '.', plotstrand, '.pdf', sep=''), width=25, height=10)
 	}
 	# append general plotting params.
 	params <- append(params, list(fontsize=20, cex.title=1.5, main=main))

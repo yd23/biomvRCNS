@@ -5,7 +5,7 @@
 ##################################################
 # re-implement HSMM, one more slot to handle distance array
 ##################################################
-biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnno=NULL, soj.type='gamma', emis.type='norm', q.alpha=0.05, r.var=0.75, iterative=TRUE, maxit=1000, tol=1e-04, grp=NULL, clusterm=NULL, na.rm=TRUE){
+biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', xAnno=NULL, soj.type='gamma', emis.type='norm', q.alpha=0.05, r.var=0.75, maxit=1000, maxgap=Inf, tol=1e-04, grp=NULL, clusterm=NULL, na.rm=TRUE){
 	## input checking
 	# x, matrix/range like
 	# xPos, x feature information if x is not a grange object; so for count data, x should be a GRange , for other continous data, a matrix /  Grange
@@ -14,7 +14,6 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnn
 	# xAnno, dataframe/range like object contains the same number of features for x data rows, then consider to lock sojourn dist
 	# soj.type, sojourn dist type
 	# family, whether a array like normal/t, or sequencing like poisson/nbinom
-	# iterative, default T for count, and F for real
 	# maxit, max itration 
 	# ints, prior information, need more, see core.r	#fixme
 	# lock.transition / lock.d, lock transition and sojourn #fixme
@@ -24,19 +23,27 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnn
 	#  ksmooth.thresh = 1e-20 #this is a threshold for which d(u) values to use - if we throw too many weights in the default density() seems to work quite poorly
 	#  shiftthresh = 1e-20 #threshold for effective "0" when considering d(u)	
 	
-	if (!is.numeric(x) || !(is.vector(x) || is.matrix(x))) 
-        stop("'x' must be a numeric vector or matrix.")
-	if(length(dim(x))==2){
-		x<-matrix(as.numeric(unlist(x), use.names=F), dim(x)[1], dim(x)[2])
+	if (!is.numeric(x) &&  !is.matrix(x) && class(x)!='GRanges') 
+        stop("'x' must be a numeric vector or matrix or a GRanges object.")
+    if(class(x)=='GRanges') {
+    	xid<-names(values(x))
+    	xRange<-x
+    	mcols(xRange)<-NULL
+    	x<-as.matrix(values(x))
+    } else if(length(dim(x))==2){
+		xid<-colnames(x)
+		x<-as.matrix(x)
 	} else {
 		warning('no dim attributes, coercing x to a matrix with 1 column !!!')
 		x <- matrix(as.numeric(x), ncol=1)
+		xid<-paste('S', seq_len(nc), sep='')
+		colnames(x)<-xid
 	}
-	nr<-nrow(x) # should probably change this to T, in line with theory
+	nr<-nrow(x) 
 	nc<-ncol(x)
 	
 	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
-	if(!is.null(xRange) && class(xRange)=='IRanges' && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
+	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
 		if(usePos=='start'){
 			xPos<-start(xRange)
 		} else if(usePos=='end'){
@@ -44,20 +51,24 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnn
 		} else {
 			xPos<-(start(xRange)+end(xRange))/2
 		}
-	} else if (is.null(xPos) || !is.numeric(xPos) || length(xPos)!=nr){
+	} else {
+		# no valid xRange, set it to null
+		warning('no valid xRange and usePos found, check if you have specified xRange / usePos.')
+		xRange<- NULL
+	} 
+	if (is.null(xPos) || !is.numeric(xPos) || length(xPos)!=nr){
 		warnings("No valid positional information found. Re-check if you have specified any xPos / xRange.")
 		xPos<-NULL
 	}
-	
-
 	if (!is.null(maxbp) && (!is.numeric(maxbp) || (length(maxbp) != 1) || (maxbp <= 1) ||  ( !is.null(xPos) && maxbp > max(xPos,na.rm=na.rm)-min(xPos, na.rm=na.rm)))) 
-	 	 stop(sprintf("'maxk' must be a single integer between 2 and the maximum length of the region if xPos is avaliable."))	
+	 	 stop(sprintf("'maxbp' must be a single integer between 2 and the maximum length of the region if xPos is avaliable."))	
 	
-	# check grp setting, cluster if needed, otherwise treat as one group	
+	# check grp setting, cluster if needed, otherwise treat as one group
+	if(!is.null(grp)) grp<-as.character(grp)
 	grp<-preClustGrp(x, grp=grp, clusterm=clusterm)
 	
 	# initial sojourn setup unifiy parameter input / density input,  using extra distance, non-integer value can give a dtype value
-	if(!is.null(xAnno) && !is.null(soj.type) && soj.type %in% c('gamma') && class(xAnno) %in% c('TranscriptDb', 'GRanges', 'GRangesList')){
+	if(!is.null(xAnno) && !is.null(soj.type) && soj.type %in% c('gamma', 'pois', 'nbinom') && class(xAnno) %in% c('TranscriptDb', 'GRanges', 'GRangesList')){
 		#	this is only used when the xAnno object contains appropriate annotation infromation which could be used as prior for the sojourn dist in the new HSMM model
 		# if xAnno is also present, then J will be estimated from xAnno, and pop a warning, ## this only make sense if difference exist in the distribution of sojourn of states.		
 		soj<-sojournAnno(xAnno, soj.type=soj.type)
@@ -68,174 +79,188 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, xAnn
 			# estimating a reasonable number for maxbp
 #			fixme, this is related to the soj type, now only have gamma avaliable
 			maxbp<-ceiling(median(sapply(1:J, function(j) soj$shape[j]*soj$scale[j])))	
-		} 
-		if(!is.null(xPos) && maxbp>1){
-			soj<-append(soj, initDposV(xPos, maxbp))
-			if(is.null(maxk)) {
-				maxk<-soj$maxk
-			} else {	
-				soj$maxk<-maxk
-			}
 		}
+		soj<-append(soj, maxbp=maxbp) 
 	} else if(is.numeric(J) && J>1){
-		J<-as.integer(J)
-		# xAnno is not present or format not supported
-		warning('xAnno is not present or not supported, try to use maxbp/maxk in the uniform prior for the sojourn distribution !!!')
-		if(!is.null(xPos) && !is.null(maxbp) && maxbp > 1 && maxbp < max(xPos,na.rm=na.rm)-min(xPos, na.rm=na.rm)){
-			# use pos in the sojourn 
-			soj<-initDposV(xPos, maxbp)
-			maxk<-soj$maxk
-			soj<-append(soj, list(type=soj.type, J=J, d=unifMJ(maxk*nr, J)))
-		} else if (!is.null(maxk) && is.numeric(maxk) && (length(maxk) == 1) && (maxk > 1) &&  (maxk < nr)) {
-			warning('maxbp and xPos are not present or not valid, using maxk for the sojourn distribution !!!')
-			soj<-list(d = unifMJ(maxk, J), type = soj.type, J=J, maxk=maxk)
+		cat('xAnno is not present or not supported, try to use maxbp/maxk in the uniform prior for the sojourn distribution!\n') 
+		# J is ok
+		if(is.null(xPos)){
+			# no position as well, in turn means no xRange nor multiple seq, 
+			# init if J and maxk are ok
+			if (!is.null(maxk) && is.numeric(maxk) && (length(maxk) == 1) && (maxk > 1) &&  (maxk < nr)) {
+				warning('maxbp and xPos are not present or not valid, using maxk for the sojourn distribution !!!')
+				soj<-list(d = unifMJ(maxk, J), type = soj.type, J=J, maxk=maxk)
+			} else {
+				stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d.", nr))
+			}
+		} else if(!is.null(maxbp) && maxbp > 1){
+			# has position and good maxbp, will init it latter, maxk will be estimated there
+			soj<-list(J=J, maxbp=maxbp, type = soj.type)
 		} else {
-			stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d.", nr))
+			stop(sprintf("Both maxk and maxbp are not avaliable!"))
+		}
+	} else {
+		# no good J
+		stop("J must be specified or estimated from xAnno !!")
+	}
+	# so far, soj is a list object, depending on which case
+	# case1, soj param J, maxbp from xAnno
+	# case2, no pos, has input maxk and J and d, ready for initSojDd
+	# case3, has input pos and maxbp
+
+
+	# check mv vs iterative
+	 if (emis.type=='mvnorm' ){
+		iterative<-FALSE
+	} else {
+		iterative<-TRUE
+	}
+	
+	## build xRange if not a GRanges for the returning object
+	if(is.null(xRange) || class(xRange) != 'GRanges'){
+		if(!is.null(xRange) && class(xRange) == 'IRanges'){
+			xRange<-GRanges(seqnames='sampleseq', xRange)	
+		} else 	if(!is.null(xPos)){
+			xRange<-GRanges(seqnames='sampleseq', IRanges(start=xPos, width=1))	
+		} else {
+			xRange<-GRanges(seqnames='sampleseq', IRanges(start=seq_len(nr), width=1))	
 		}
 	}
-	soj <- initSojDd(soj)
+	# get seqnames status	
+	seqs<-unique(as.character(seqnames(xRange)))
 	
-	if(emis.type=='mvnorm' && iterative==TRUE){
-		emis.type<-'norm'
-	} else if (emis.type=='mvnorm' ){
-		iterative<-FALSE
-	}
 	
 	## initialize the output vectors
-	state <- vector(mode="list", length=nc)
-	for(g in unique(grp)){
-		cat(sprintf("step 1 building HSMM for group %s\n", g))
-		gi<-grp==g
-		## fillin here
-		if(iterative){
-			## whole algo here
-			for(c in which(gi)){
-				csoj<-soj
-				# create default uniform initial probablity
-				init<-rep(1/J, J) # start with uniform
-				# create default uniform transition probablity
-				trans <- matrix(1/(J-1), nrow = J, ncol=J)
-				diag(trans)<-0
-				# initialize emission parameters, either from user input or raw data
-				emis<-list(type=emis.type)
-				if(emis$type == 'norm') {
-					emis$mu <- estEmisMu(x[,c], J, q.alpha=q.alpha)
-					emis$var <- estEmisVar(x[,c], J, r.var=r.var)
-				} else if (emis$type == 'pois'){
-					emis$lambda  <- estEmisMu(x[,c], J, q.alpha=q.alpha)
-				}
-				#estimation of most likely state sequence
-				# switch est.method   viterbi , .C /  smooth
-				#define likelihood
-				ll <- rep(NA,maxit)
-				# start MM iteration
-				for(it in 1:maxit) {
-					# reestimationg of emmision   
-					emis<-initEmis(emis=emis, x=x[,c])
-					B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(csoj$d), D=as.double(csoj$D),
-							  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
-							  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
-							  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='bioCNS')
+	state <- matrix(NA, nrow=nr, ncol=nc)
+	res<-GRanges(); #seqlevels(res)<-seqlevels(xRange)
+	
+	# we have more than one seq to batch
+	for(s in seq_along(seqs)){
+		r<-as.character(seqnames(xRange)) == seqs[s]
+		# prep soj for the c loop, since there are multiple seq, which also means there must be xpos and maxbp
+		if(is.null(soj$d)){
+			ssoj<-append(soj, initDposV(xPos[r], maxbp))
+			if(is.null(ssoj$fttypes)){
+				ssoj<-append(ssoj, list(d=unifMJ(ssoj$maxk*sum(r), J)))
+			}
+		}	
+		ssoj <- initSojDd(ssoj)
 		
-					#check gamma and eta
-#					if(any(is.nan(B$L))) {
-#					  warnings("NaNs detected in gamma.  Exiting...")
-#					  return(B)
-#					}
-					if(any(B$L<0)) B$L = zapsmall(B$L)      
+		for(g in unique(grp)){
+			cat(sprintf("step 1 building HSMM for group %s\n", g))
+			gi<-grp==g
+			if(iterative){
+				for(c in which(gi)){
+					cat(sprintf("step 1 building HSMM for seq %s in column %s.\n", seqs[s], c))
+					runout<-biomvRhsmmRun(x[r,c], xid[c], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap) 	
+					res<-c(res, runout$res)
+					state[r, c]<-runout$yhat
+				}
+			} else {
+				runout<-biomvRhsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap)	
+				res<-c(res, runout$res)
+				state[r, gi]<-runout$yhat
+			}
+		} # end for g
+	}	# end for s
+	
+	# setup input data and state to xRange for returning
+	colnames(state)<-paste('state.',xid, sep='')
+	values(xRange)<-DataFrame(x, state, row.names = NULL)
+	new("biomvRCNS",  
+		x = xRange, res = res,
+		param=list(J=J, maxk=maxk, maxbp=maxbp, maxgap=maxgap, soj.type=soj.type, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var, iterative=iterative, maxit=maxit, tol=tol, group=grp, clusterm=clusterm, na.rm=na.rm)
+	)
+}
+
+
+
+biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05, r.var=0.75, maxit=1, maxgap=Inf, na.rm=TRUE){
+	# now x should be a one column matrix
+	if(is.null(dim(x))) x<-matrix(x); colnames(x)<-xid
+	nr<-nrow(x)
+	J<-soj$J
+	maxk<-soj$maxk
+	
+	
+	# create default uniform initial probablity
+	init<-rep(1/J, J) # start with uniform
+	# create default uniform transition probablity
+	trans <- matrix(1/(J-1), nrow = J, ncol=J)
+	diag(trans)<-0
+	
+	# initialize emission parameters, either from user input or raw data
+	emis<-list(type=emis.type)
+	if(emis$type == 'norm' || emis$type== 'mvnorm') {
+		emis$mu <- estEmisMu(x, J, q.alpha=q.alpha)
+		emis$var <- estEmisVar(x, J, r.var=r.var)
+	} else if (emis$type == 'pois'){
+		emis$lambda  <- estEmisMu(x, J, q.alpha=q.alpha)
+	}
+	
+	#estimation of most likely state sequence
+	# switch est.method   viterbi , .C /  smooth
+	#define likelihood
+	ll <- rep(NA,maxit)
+	# start MM iteration
+	for(it in 1:maxit) {
+		# reestimationg of emmision   
+		emis<-initEmis(emis=emis, x=x)
+		B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
+				  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
+				  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
+				  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='bioCNS')
+
+		#check gamma and eta
+#		if(any(is.nan(B$L))) {
+#		  warnings("NaNs detected in gamma.  Exiting...")
+#		  return(B)
+#		}
+		if(any(B$L<0)) B$L = zapsmall(B$L)      
 #					if(any(B$eta<0)) B$eta = zapsmall(B$eta)      
 #					if(any(B$N<0))  B$N = zapsmall(B$N)		
 
-					#update initial prob PI, transition >=0 check
-					init<-B$pihat
-					init[init<0]<-0
-					trans <- matrix(B$ahat,ncol=J)
-					trans[trans<0] <- 0
-				
-					#update emision according to the new estimated distribution paramenters using B$gamma sample in  (mstep(x,matrix(B$gamma,ncol=J))))	
-					emis<-initEmis(emis=emis, x=x[,c], B=B)
-					# update sojourn dD, using eta(nonparametric), eta+d (ksmoothed-nonparametric), eta+d+shift(poisson), eta(nbinom), eta(gamma)
-					csoj<-initSojDd(soj=csoj, B=B)
-
-					# loglikelihood for this it, using B$N
-					ll[it]<-sum(log(B$N))
-					if( it>1 && abs(ll[it]-ll[it-1]) < tol) {
-						break()	
-					}
-				}	 # end for maxit
-
-				## assign states and split if necessary.
-				if(is.null(soj$fttypes)){
-					yhat<-as.character(apply(matrix(B$L,ncol=J),1,which.max))
-				} else {
-					yhat<-soj$fttypes[apply(matrix(B$L,ncol=J),1,which.max)]
-				}
-				state[[c]]<-yhat	 
-			} #end for c
-			
-		} else {
-			# this means it is a mvnorm 
-			gsoj<-soj
-			# initialize emission parameters, either from user input or raw data
-			emis<-list(type=emis.type)
-			emis$mu <- estEmisMu(x[,gi], J, q.alpha=q.alpha)
-			emis$var <- estEmisVar(x[,gi], J, r.var=r.var)
-			#estimation of most likely state sequence
-			# switch est.method   viterbi , .C /  smooth
-			#define likelihood
-			ll <- rep(NA,maxit)
-			# start MM iteration
-			for(it in 1:maxit) {
-				# reestimationg of emmision   
-				emis<-initEmis(emis=emis, x=x[,gi])
-				B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(gsoj$d), D=as.double(gsoj$D),
-						  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
-						  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
-						  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='bioCNS')
+		#update initial prob PI, transition >=0 check
+		init<-B$pihat
+		init[init<0]<-0
+		trans <- matrix(B$ahat,ncol=J)
+		trans[trans<0] <- 0
 	
-				#check gamma and eta
-#				if(any(is.nan(B$L))) {
-#				  warnings("NaNs detected in gamma.  Exiting...")
-#				  return(B)
-#				}
-				if(any(B$L<0)) B$L = zapsmall(B$L)      
-#				if(any(B$eta<0)) B$eta = zapsmall(B$eta)      
-#				if(any(B$N<0))  B$N = zapsmall(B$N)
+		#update emision according to the new estimated distribution paramenters using B$gamma sample in  (mstep(x,matrix(B$gamma,ncol=J))))	
+		emis<-initEmis(emis=emis, x=x, B=B)
+		# update sojourn dD, using eta(nonparametric), eta+d (ksmoothed-nonparametric), eta+d+shift(poisson), eta(nbinom), eta(gamma)
+		soj<-initSojDd(soj=soj, B=B)
 
-				#update initial prob PI, transition >=0 check
-				init<-B$pihat
-				init[init<0]<-0
-				trans <- matrix(B$ahat,ncol=J)
-				trans[trans<0] <- 0
-			
-				#update emision according to the new estimated distribution paramenters using B$gamma sample in  (mstep(x,matrix(B$gamma,ncol=J))))	
-				emis<-initEmis(emis=emis, x=x[,gi], B=B)
-				# update sojourn dD, using eta(nonparametric), eta+d (ksmoothed-nonparametric), eta+d+shift(poisson), eta(nbinom), eta(gamma)
-				gsoj<-initSojDd(soj=gsoj, B=B)
+		# loglikelihood for this it, using B$N
+		ll[it]<-sum(log(B$N))
+		if( it>1 && abs(ll[it]-ll[it-1]) < tol) {
+			break()	
+		}
+	}	 # end for maxit
+	## assign states and split if necessary.
+	if(is.null(soj$fttypes)){
+		yhat<-as.character(apply(matrix(B$L,ncol=J),1,which.max))
+	} else {
+		yhat<-soj$fttypes[apply(matrix(B$L,ncol=J),1,which.max)]
+	}
 
-				# loglikelihood for this it, using B$N
-				ll[it]<-sum(log(B$N))
-				if( it>1 && abs(ll[it]-ll[it-1]) < tol) {
-					break()	
-				}
-			}	 # end for maxit
-
-			## assign states and split if necessary.
-			if(is.null(soj$fttypes)){
-				yhat<-as.character(apply(matrix(B$L,ncol=J),1,which.max))
-			} else {
-				yhat<-soj$fttypes[apply(matrix(B$L,ncol=J),1,which.max)]
-			}
-			state[gi]<-lapply(seq_len(sum(gi)), function(c) yhat)	 			
-		} # end if iterative
-	} # end g
-	
-	new("biomvRhsmm",
-    x = x,
-    state = state,
-    group=as.integer(grp),
-	family=emis.type)
+	# setup this new res gr
+	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=ranges(xRange), maxgap=Inf, state=j)))
+	names(Ilist)<-unique(yhat)
+	res<- do.call('c', 
+					lapply(unique(yhat), function(j)
+						GRanges(seqnames=as.character(seqnames(xRange)[1]), 
+							IRanges(start=rep(start(xRange)[Ilist[[j]][,'IS']], length(xid)), end=rep(end(xRange)[Ilist[[j]][,'IE']], length(xid))), 
+							SAMPLE=rep(xid, each=nrow(Ilist[[j]])), 
+							STATE=rep(as.character(j), nrow(Ilist[[j]])*length(xid)), 
+							MEAN=as.numeric(sapply(xid, function(s) apply(Ilist[[j]], 1, function(r) apply(as.matrix(x[r[1]:r[2],s]), 2, mean, na.rm=na.rm))))
+						)
+					)
+			)
+	return(list(yhat=yhat, res=res))
 }
+
+
 
 
 ##################################################
@@ -284,8 +309,7 @@ simuAnno<-function(obj){
 			ptype[,g]<-unlist(sapply(2:length(pr), function(i) rep(segType[i-1], pr[i]-pr[i-1])))
 			prle<-Rle(ptype[,g])
 			xAnno<-c(xAnno, GRangesList(GRanges(seqnames = Rle(c("chr99"), ), ranges = IRanges(start=c(1, (cumsum(runLength(prle))+1)[1:(length(runLength(prle))-1)]), end=cumsum(runLength(prle))) , type= runValue(prle))))
-		}
-		
+		}	
 	} else {
 		#single group
 		segType<-rep('B', length(obj@segMean[[1]]))
@@ -301,22 +325,7 @@ simuAnno<-function(obj){
 	return(list(xMeta=xMeta, xAnno=xAnno))
 }
 
-gammafit <- function(x,wt=NULL) {
-	tol = 1e-08
-	if(is.null(wt)) wt = rep(1,length(x))
 
-      tmp = cov.wt(data.frame(x),wt=wt)
-      xhat = tmp$center
-      xs = sqrt(tmp$cov)
-      s = log(xhat) - mean(weighted.mean(log(x),wt))    
-      aold = (xhat/xs)^2
-      a = Inf
-      while(abs(a-aold)>tol) {
-        a = aold - (log(aold) - digamma(aold) - s)/((1/aold) - trigamma(aold))        
-        aold=a
-      }
-      return(list(shape=a,scale=xhat))
-}
 ##################################################
 # estimate sojourn distribution from annotation using gamma
 ##################################################
@@ -355,21 +364,48 @@ sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){
 	}
 	
 	# should switch here between different soj.type	
+	soj<-list(type = soj.type, fttypes=fttypes, J=J)
 	if(soj.type=='gamma'){
 		shape<-numeric()
 		scale<-numeric()
-		for(i in 1:J){
-			# fit  for all feature type
-			# should use this func, switch here between soj dist.
-			gampar<-gammafit(ftdist[[i]])
+		for(j in 1:J){
+			param<-gammaFit(ftdist[[j]])
 			if(! is.null(pbdist)){
 				# if distance between points are even
-				gampar$scale <- pbdist / gampar$shape
+				param['scale'] <- pbdist / param['scale']
 			}
-			shape<-c(shape, gampar$shape)
-			scale<-c(scale, gampar$scale)
+			shape<-c(shape, param['shape'])
+			scale<-c(scale, param['scale'])
 		}
-		soj<-list(shape=shape, scale=scale, type = soj.type, fttypes=fttypes, J=J)
+		soj<-append(soj, list(shape=unname(shape), scale=unname(scale)) )
+	} else if (soj.type == 'nbinom'){
+		size<-numeric()
+		mu<-numeric()
+		shift<-numeric()
+		for(j in 1:J){
+			param<-nbinomFit(ftdist[[j]])
+			if(! is.null(pbdist)){
+				# if distance between points are even
+				param['mu'] <- pbdist / param['mu']
+			}
+			size<-c(size, param['size'])
+			mu<-c(mu, param['mu'])
+			shift<-c(shift, param['shift'])
+		}
+		soj<-append(soj, list(size=unname(size), mu=unname(mu), shift=unname(shift)) )			
+	} else if (soj.type == 'pois'){
+		lambda<-numeric()
+		shift<-numeric()
+		for(j in 1:J){
+			param<-poisFit(ftdist[[j]])
+			if(! is.null(pbdist)){
+				# if distance between points are even
+				param['lambda'] <- pbdist / param['lambda']
+			}
+			lambda<-c(lambda, param['lambda'])
+			shift<-c(shift, param['shift'])
+		}
+		soj<-append(soj, list(lambda=unname(lambda), shift=unname(shift)) )			
 	}
 
 	#return soj object
@@ -388,17 +424,15 @@ initDposV<-function(xpos, maxbp){
 	#dposV[1]<-.Machine$double.eps # this will not ensure a 1 for the first position after the dgamma call.
 	# sub > maxbp and NA
 	dposV[which(dposV>maxbp)]<-NA
-	dposV[is.na(dposV)]<-.Machine$double.xmax # for those positions exceed maxbp, this works fine #fixme, now there is another problem in b/f algo, the xmax will make the reestimation of soj$d difficult...
+	#dposV[is.na(dposV)]<-.Machine$double.xmax # for those positions exceed maxbp, this works fine #fixme, now there is another problem in b/f algo, the xmax will make the reestimation of soj$d difficult...
 	return(list(dposV=dposV, maxk=maxk))
 }
 
 
 
-
 initSojDd <- function(soj, B=NULL) {
 	# take the initial soj dist parameter / or sample of density
-	if(! soj$type %in% c('nparam', 'gamma', 'poisson', 'nbinom')) stop("invalid sojourn type found in soj$type !")
-	
+	if(! soj$type %in% c('nparam', 'gamma', 'pois', 'nbinom')) stop("invalid sojourn type found in soj$type !")
 	# parameter initialisation
 	J<-soj$J
 	maxk<-soj$maxk
@@ -408,7 +442,8 @@ initSojDd <- function(soj, B=NULL) {
 		## here d for all positions should be aggregated within each J
 		dposV<-soj$dposV
 	}
-	idx<-dposV != .Machine$double.xmax
+#	idx<-dposV != .Machine$double.xmax
+	idx<- !is.na(dposV)
 	nb <- length(dposV)/maxk
 	if(soj$type == "gamma") {
 		if(!is.null(B)){
@@ -416,26 +451,77 @@ initSojDd <- function(soj, B=NULL) {
 			soj$d <- matrix(B$eta+.Machine$double.eps,ncol=J)
 			soj$shape <- soj$scale <- numeric(J)
 			for(j in 1:J) {           
-				param <- gammafit(dposV[idx],wt=soj$d[idx,j])
-				soj$shape[j] <- param$shape
-				soj$scale[j] <- param$scale     	  
+				param <- gammaFit(dposV[idx],wt=soj$d[idx,j])
+				soj$shape[j] <- param['shape']
+				soj$scale[j] <- param['scale']     	  
 			}
 		}	          
 		if(!is.null(soj$shape) && !is.null(soj$scale) && length(soj$shape)==J && length(soj$scale)==J) {
 			# for update with para estimated from B, or initial sojourn using param
-			soj$d <- matrix(nrow=length(dposV),ncol=J)
-			for(j in 1:J) {
-				soj$d[,j] <- dgamma(dposV,shape=soj$shape[j],scale=soj$scale[j])
-				#soj$d[is.infinite(soj$d[,j]),j]<-1 ## sub xmin with 1, dgamm is quite sensitive with shape parameter, only give 1 when shape =1
-				#soj$d[seq(from=1, by=maxk, length.out=nb),j]<- sapply(1:nb, function(t) 1-sum(soj$d[((t-1)*maxk+2):(t*maxk),j])) # not necessary, but make it consistent with theory
+			dposV[!idx]<- .Machine$integer.max
+			soj$d<-sapply(1:J, function(j) dgamma(dposV, shape=soj$shape[j], scale=soj$scale[j]))
+		} # else assume soj$d exist.
+	} else if (soj$type == "pois") {
+		if(!is.null(B)){
+			# then this is a update run, reestimation of dist params
+			soj$d <- matrix(B$eta+.Machine$double.eps,ncol=J)
+			soj$shift <- soj$lambda <- numeric(J)
+			
+			ftidx<-apply(soj$d, 2, function(xc) xc >.Machine$double.eps & idx)
+			maxshift<- sapply( 
+				sapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
+				function(ic) min(dposV[seq(from=min(ic[ic>0]), to=nb*maxk, by=maxk)])
+			)
+			for(j in 1:J) { 
+				param <- poisFit(dposV[ftidx[,j]], wt=soj$d[ftidx[,j],j], maxshift=maxshift[j])
+				soj$size[j] <- param['size']
+				soj$mu[j] <- param['mu']
+				soj$shift[j] <- param['shift']
 			}
+		}
+		if(!is.null(soj$shift) && !is.null(soj$lambda) && length(soj$lambda)==J && length(soj$shift)==J) {
+			# for update with para estimated from B, or initial sojourn using param
+			dposV[!idx]<- .Machine$integer.max
+			soj$d<-sapply(1:J, function(j) dpois(dposV-soj$shift[j], lambda=soj$lambda[j]))
+		} # else assume soj$d exist.
+		
+	}  else if (soj$type == "nbinom") {
+		if(!is.null(B)){
+			# then this is a update run, reestimation of dist params
+			soj$d <- matrix(B$eta+.Machine$double.eps,ncol=J)
+			soj$shift <- soj$size <- soj$mu <- numeric(J)    
+			
+			ftidx<-apply(soj$d, 2, function(xc) xc >.Machine$double.eps & idx)
+			show(okidx)
+			maxshift<- sapply( 
+				lapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
+				function(ic) min(dposV[seq(from=min(ic[ic>0]), to=nb*maxk, by=maxk)])
+			)
+			for(j in 1:J) { 
+				param <- nbinomFit(dposV[ftidx[,j]],wt=soj$d[ftidx[,j],j], maxshift=maxshift[j])
+				soj$size[j] <- param['size']
+				soj$mu[j] <- param['mu']
+				soj$shift[j] <- param['shift']
+			}	
+		}
+		if(!is.null(soj$shift) && !is.null(soj$size) && !is.null(soj$mu) && length(soj$mu)==J && length(soj$shift)==J && length(soj$size)==J) {
+			# for update with para estimated from B, or initial sojourn using param
+			dposV[!idx]<- .Machine$integer.max
+			soj$d<-sapply(1:J, function(j) dnbinom(dposV-soj$shift[j],size=soj$size[j],mu=soj$mu[j]) )
+		} # else assume soj$d exist.
+	} else if (soj$type == "nparam") {
+		if(!is.null(B)){
+			 soj$d <- apply(matrix(B$eta+.Machine$double.eps, ncol=J), 2, function(x) x/sum(x))
 		} # else assume soj$d exist.
 	}
 	# add D slot
 	soj$D <- sapply(1:J, function(j) sapply(1:nb, function(t) rev(cumsum(rev(soj$d[((t-1)*maxk+1):(t*maxk),j])))))
-	# return soj with the initial d slot
 	return(soj)
 }
+
+
+
+
 
 ##################################################
 # to estimate segment wise mean vector/list
@@ -460,8 +546,8 @@ estEmisMu<- function(x, J, q.alpha=0.05, na.rm=TRUE){
 # to estimate segment wise variance vector / covariance matrix list
 ##################################################
 estEmisVar<-function(x, J=3, na.rm=TRUE, r.var=0.75){
-	# q.var is the espected ration of variance for state 1 and J versus any intermediate states
-	# a value larger than 1 tend to givce more extreme states;  a value smaller than 1 will decrease the probablity of having extreme state, pushing it to the center.
+	# r.var is the espected ration of variance for state 1 and J versus any intermediate states
+	# a value larger than 1 tend to give more extreme states;  a value smaller than 1 will decrease the probablity of having extreme state, pushing it to the center.
 	nc<-ncol(x)
 	f.var<-rep(ifelse(r.var>=1, 1, r.var), J)
 	if(J%%2 == 1) {
@@ -519,7 +605,7 @@ initEmis<-function(emis, x, B=NULL){
 	return(emis)
 }	
 
-splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=NULL, state){
+splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=NULL){
 	require(IRanges)
 	yhatrle<-Rle(yhat)
 	rv<-runValue(yhatrle)
@@ -535,3 +621,5 @@ splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=NULL, state
 	}
 	return(list(IS=intStart, IE=intEnd))
 }
+
+

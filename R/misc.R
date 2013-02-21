@@ -1,7 +1,7 @@
 ##################################################
 #			segmentation functions
 ##################################################
-simMvSegData<-function(nr=50, nc=10, N=c(3,4), family=family, comVar=T, segDisp=F){
+simmvRsegData<-function(nr=50, nc=10, N=c(3,4), family=family, comVar=T, segDisp=F){
 	set.seed(1234)
 	## input check
 	family<-match.arg(family, c('norm', 'pois', 'nbinom'))
@@ -115,9 +115,10 @@ preClustGrp<-function(x, grp=NULL, clusterm=NULL){
 ##################################################
 #  maxgap minrun algo, utilizing RLE, mostly for transcript detection...
 ##################################################
-maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, maxgap=2, splitLen=Inf, na.rm=TRUE){
+maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, maxgap=2, splitLen=Inf){
 	# optional position vector, if not present, use index as postion
 	# output values, index of active intervals, plus func parameters 
+	na.rm=TRUE
 	if(is.null(cutoff)){
 		cutoff<- as.numeric(quantile(x, q, na.rm=na.rm))
 	} else if (cutoff >= max(x, na.rm=na.rm) || cutoff<=min(x, na.rm=na.rm)) {
@@ -211,8 +212,8 @@ maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, 
 ##################################################
 # helper function to split far away neighbouring items
 ##################################################
-splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xpos=NULL, xrange=NULL, maxgap=NULL, minrun=1){
-	if(!is.null(xrange) ) xpos<-NULL
+splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xpos=NULL, xrange=NULL, maxgap=Inf, minrun=1){
+	if(!is.null(xrange) && class(xrange)=='GRanges' || class(xrange)== 'IRanges') xpos<-NULL
 	if(!is.null(xpos) || !is.null(xrange) && !is.null(intStart) && !is.null(intEnd) && length(intEnd)==length(intStart)){
 		if(!is.null(xpos)){
 			n<-length(xpos)
@@ -286,4 +287,43 @@ splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xpos=NULL, xrange=NULL, 
 	return(list(IS=intStart, IE=intEnd))
 }
 
+gammaFit<-function(x, wt=NULL){
+	if(is.null(wt)) wt <- rep(1,length(x))
+	if(length(x) != length(wt)) stop("length of x and wt differ!")
+	
+	tmp <- cov.wt(data.frame(x),wt=wt)
+    shape0 <- (tmp$center/sqrt(tmp$cov))^2
+    scale<-as.numeric(tmp$center)
+    shape<-optimize(function(shape) sum(dgamma(x,shape=shape, scale=scale,  log=TRUE)*wt), c(shape0-sqrt(tmp$cov), shape0+sqrt(tmp$cov)) , maximum = TRUE)[[1]]
+	return(c(shape=shape, scale=scale))
+}
 
+poisFit <- function(x, wt=NULL, maxshift=1) {  	
+	if(maxshift>min(x)) stop("maxshift can't be greater than the minimum of x !")
+	if(is.null(wt)) wt <- rep(1/length(x),length(x))
+	if(length(x) != length(wt)) stop("length of x and wt differ!")
+	
+	shift<-which.max(sapply(1:maxshift, function(s) dpois(x = x-s, lambda=(x-s) %*% wt,log=TRUE) %*% wt))
+	lambda <- (x-shift) %*% wt 
+    return(c(shift=shift, lambda=lambda))
+}
+
+nbinomFit <- function(x, wt=NULL, maxshift=1) {  	
+	if(maxshift>min(x)) stop("maxshift can't be greater than the minimum of x !")
+	if(is.null(wt)) wt <- rep(1,length(x))
+	if(length(x) != length(wt)) stop("length of x and wt differ!")
+	
+	shift <- which.max(sapply(1:maxshift,  function(s) nbinomCLLDD(x, wt, s)$value))
+    res<-c(nbinomCLLDD(x, wt, shift)$par, shift)
+    names(res)<-c('size', 'mu', 'shift')
+    return(res)
+}
+
+nbinomCLLDD<-function(x, wt=NULL, s=1){
+	if(is.null(wt)) wt <- rep(1,length(x))
+	if(length(x) != length(wt)) stop("length of x and wt differ!")
+	m <- weighted.mean(x-s,wt)
+	v <- as.numeric(cov.wt(data.frame(x-s),wt=wt)$cov)
+	size <- if (v > m) m^2/(v - m) else 100
+	optim(c(size,m),function(par) sum(dnbinom(x-s,size=par[1],mu=par[2],log=TRUE)*wt)  ,control=list(fnscale=-1,reltol=1e-4,maxit=10000))
+}
