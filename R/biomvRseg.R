@@ -1,5 +1,6 @@
 ## main function for normized numeric intensity vectors
-biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=NULL, maxbp=NULL, maxgap=Inf, usePos='start', grp=NULL, penalty='BIC', clusterm=NULL, twoStep=TRUE, segDisp=FALSE, useMC=FALSE, useSum=TRUE, comVar=TRUE, na.rm=TRUE, tol=1E-6){
+biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NULL, usePos='start', family='norm', penalty='BIC', twoStep=TRUE, segDisp=FALSE, useMC=FALSE, useSum=TRUE, comVar=TRUE, maxgap=Inf, tol=1e-06, grp=NULL, clusterm=NULL, na.rm=TRUE){
+	
 	# input to the main function is a matrix object, x, features on the same strand and same chr
 	# optional grouping factor, length of which should be the same as the column of x
 	# input checking and preparion
@@ -19,11 +20,13 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 	} else {
 		warning('No dim attributes, coercing x to a matrix with 1 column !!!')
 		x <- matrix(as.numeric(x), ncol=1)
-		xid<-paste('S', seq_len(nc), sep='')
-		colnames(x)<-xid
 	}
 	nr<-nrow(x) 
 	nc<-ncol(x)
+	if(is.null(xid)){
+		xid<-paste('S', seq_len(nc), sep='')
+		colnames(x)<-xid
+	}
 	
 	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
 	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
@@ -58,7 +61,7 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 #		stop(sprintf("the product of 'maxseg' and 'maxk' is smaller than the number of rows of 'x': %d.", nr))
 
     # penalty
-    penaltymethods<-c('none','AIC','AICc','BIC','SIC','HQIC')
+    penaltymethods<-c('none','AIC','AICc','BIC','SIC','HQIC', 'mBIC')
     penalty<-match.arg(penalty, penaltymethods)
     if(penalty=='SIC') penalty='BIC' 
     
@@ -87,6 +90,9 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 	
 	tmaxk<-maxk
 	# we have more than one seq to batch
+	
+####	fixme, xRange doesnot sound right. need a look at. !!!!!!!!
+	
 	for(s in seq_along(seqs)){
 		cat(sprintf("Processing sequence %s\n", seqs[s]))
 		r<-which(as.character(seqnames(xRange)) == seqs[s])
@@ -117,7 +123,7 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 			} else {
 				C<-regionSegCost(x[r,gi], maxk=maxk, family=family, useSum=useSum, comVar=comVar)
 			}
-			Res<- .C("univaRseg", as.double(C), as.integer(maxseg), as.integer(maxk), as.integer(length(r)), cost=double(maxseg*length(r)), pos=integer((maxseg-1)*length(r)), minC=double(maxseg), segS=integer(maxseg*maxseg))#, PACKAGE = "biomvRCNS")
+			Res<- .C("univaRseg", as.double(C), as.integer(maxseg), as.integer(maxk), as.integer(length(r)), cost=double(maxseg*length(r)), pos=integer((maxseg-1)*length(r)), minC=double(maxseg), segS=integer(maxseg*maxseg), PACKAGE = "biomvRCNS")
 		
 			if( family== 'norm'){
 				# norm
@@ -142,15 +148,17 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 			} else if ( family=='norm' && !comVar && !useSum) {
 				nP<-seq_len(maxseg)*d*2+seq_len(maxseg)-1
 			}
-			#	BICpenalty = -0.5*sum(log(nTotalWindow)) - nCpts*log(length(combX)) + 0.5*log(nTotal)
-			#	mBIC = lik1-lik0+BICpenalty
+			# mbic 2nd term,
+			mbic2ndt<-sapply(mat2list(Res$segS, maxseg), function(p) sum(log(p-c(1, p[-length(p)]))))
+
+			
 			# the optimal number of final segments for series within this group
 			rN<-switch(penalty,
 				none = which.max(logL),
 				AIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x])),
 				AICc = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*(nP[x]+1)/(length(r)*d-nP[x]-1))),
 				BIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+nP[x]*log(length(r)*d))),
-#fixme 				mBIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+nP[x]*log(length(r)*d))),
+				mBIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x] +mbic2ndt[x]/2- log(length(r)*d)/2 + nP[x]*log(length(r)*d))),
 				HQIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*log(log(length(r)*d)))),
 				stop('Invalid value argument for penalty'))	
 			cat(sprintf("Step 1 building segmetation model for group %s complete\n", g))
@@ -168,11 +176,11 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 					segStart[[c]]<-r[rIdx]
 					segMean[[c]]<-sapply(seq_len(rN), function(z) mean(x[i[z]:j[z],c]))
 										
-					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xrange=ranges(xRange), maxgap=maxgap)
+					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xRange=ranges(xRange), maxgap=maxgap)
 					tores<-GRanges(seqnames=as.character(seqs[s]), 
 						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)), 
 						SAMPLE=rep(xid[c], each=length(Ilist$IS)), 
-						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(r) apply(as.matrix(x[Ilist$IS[r]:Ilist$IE[r],c]), 2, mean, na.rm=na.rm)))
+						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(t) apply(as.matrix(x[Ilist$IS[t]:Ilist$IE[t],c]), 2, mean, na.rm=na.rm)))
 					)
 					mcols(tores)<-DataFrame(values(tores), STATE=sapply(1:length(tores), function(i) ifelse(values(tores)[i, 'MEAN']>mean(x[r,c], na.rm=na.rm), 'HIGH', 'LOW')), row.names = NULL)
 					res<-c(res, tores)
@@ -196,7 +204,7 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 					}		
 					# use this regional cost to do dp merging
 	#				rRes<-.Call("univaRseg", rC , as.integer(rN),  PACKAGE = "biomvRCNS") # .call version
-					rRes<- .C("univaRseg", as.double(rC), as.integer(rN), as.integer(maxseg), as.integer(maxseg), cost=double(rN*maxseg), pos=integer((rN-1)*maxseg),minC=double(rN*maxseg), segS=integer(rN*rN))#, PACKAGE = "biomvRCNS") # .C version
+					rRes<- .C("univaRseg", as.double(rC), as.integer(rN), as.integer(maxseg), as.integer(maxseg), cost=double(rN*maxseg), pos=integer((rN-1)*maxseg),minC=double(rN*maxseg), segS=integer(rN*rN), PACKAGE = "biomvRCNS") # .C version
 
 					rIdx<-mat2list(rRes$segS, rN)[[rN]]
 					j<-r[c(1,rRegs[rIdx-1])] # col, segStart, original index, including 1
@@ -206,11 +214,11 @@ biomvRseg<-function(x, maxk=NULL, maxseg=NULL, family='norm', xPos=NULL, xRange=
 					segStart[[c]]<-r[rRegs[rIdx-1]]			
 					segMean[[c]]<-sapply(seq_len(rN), function(z) mean(x[i[z]:j[z],c]))	
 					
-					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xrange=ranges(xRange), maxgap=maxgap)
+					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xRange=ranges(xRange), maxgap=maxgap)
 					tores<-GRanges(seqnames=as.character(seqs[s]), 
 						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)), 
 						SAMPLE=rep(xid[c], each=length(Ilist$IS)), 
-						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(r) apply(as.matrix(x[Ilist$IS[r]:Ilist$IE[r],c]), 2, mean, na.rm=na.rm)))
+						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(t) apply(as.matrix(x[Ilist$IS[t]:Ilist$IE[t],c]), 2, mean, na.rm=na.rm)))
 					)
 					mcols(tores)<-DataFrame(values(tores), STATE=sapply(1:length(tores), function(i) ifelse(values(tores)[i, 'MEAN']>mean(x[r,c], na.rm=na.rm), 'HIGH', 'LOW')), row.names = NULL)
 					res<-c(res, tores)
@@ -270,6 +278,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
         }
     }
     n<-length(r)
+    naVal<-.Machine$double.xmax
     
     ## add a checking for useSum in norm models
     if(d==1 && !useSum){
@@ -369,7 +378,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
 	    		}
 	    	}
 		}
-		if(N==n) C[1,]<-.Machine$double.xmax #  give NA/Inf to the cost of single point in the first step, to avoid a positive epsilon or NaN, thus exclude consecutive changes
+		if(N==n) C[1,]<-naVal #  give NA/Inf to the cost of single point in the first step, to avoid a positive epsilon or NaN, thus exclude consecutive changes
 		
     } else if (family== 'pois') { # for poisson
     	C[, 1] <- crss[k]*log(crss[k]/(sk[k]*d))
@@ -440,7 +449,14 @@ regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE, tol=1e-06){
         r <- rowSums(x)
     }
     n<-length(r)
-    
+       
+   if(useMC & length(find.package('multicore', quiet=T))==0) {
+		warning("'multicore' is not found, use normal 'apply' function!!!")
+		useMC<-FALSE
+	} else if (useMC){
+		require(multicore)
+	}
+        
     ## check input parameter maxk and segs
      if (is.null(segs)) {
      	if (is.null(maxk)){

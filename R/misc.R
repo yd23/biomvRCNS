@@ -1,7 +1,7 @@
 ##################################################
 #			segmentation functions
 ##################################################
-simmvRsegData<-function(nr=50, nc=10, N=c(3,4), family=family, comVar=T, segDisp=F){
+simmvRsegData<-function(nr=50, nc=10, N=c(3,4), family='norm', comVar=TRUE, segDisp=FALSE){
 	set.seed(1234)
 	## input check
 	family<-match.arg(family, c('norm', 'pois', 'nbinom'))
@@ -53,14 +53,13 @@ simmvRsegData<-function(nr=50, nc=10, N=c(3,4), family=family, comVar=T, segDisp
 	}
 
 	## return simulated object
-	new("bioMvRseg",
-    x = x,
-    segStart = segs,
-    segMean=regm,
-#    segSd=regsd,
-#    segAlpha=lapply(seq_len(nc), function(i) 1/regd[[i]]),
-    group=ng,
-    family=family)
+#	new("biomvRseg",
+#    x = x,
+#    segStart = segs,
+#    segMean=regm,
+#    group=ng,
+#    family=family)
+	return(list(x=x, segStart=segs, segMean=segm, group=ng))
 }
 
 
@@ -81,7 +80,7 @@ mat2list<-function(x, nr=NULL){
 }
 
 # check grp setting, cluster if needed, otherwise treat as one group
-preClustGrp<-function(x, grp=NULL, clusterm=NULL){
+preClustGrp<-function(x, grp=NULL, clusterm=NULL, deepSplit=4, minClusterSize=4){
 	clustmethods<-c('ward','single','complete','average','mcquitty','median','centroid')
 	nc<-ncol(x)
 	if (!is.null(grp)) {
@@ -101,7 +100,7 @@ preClustGrp<-function(x, grp=NULL, clusterm=NULL){
 			HC <- hclust(DM, method=clusterm)
 			require(dynamicTreeCut)
 			# may provide parameter input later for this function
-			grp<-cutreeDynamic(dendro = HC, distM = as.matrix(DM), deepSplit = 4, pamRespectsDendro = FALSE, minClusterSize = 4, verbose=0) ## could change this minclustersize to a parameter
+			grp<-cutreeDynamic(dendro = HC, distM = as.matrix(DM), deepSplit = deepSplit, pamRespectsDendro = FALSE, minClusterSize = minClusterSize, verbose=0) ## could change this minclustersize to a parameter
 		}
 	} else {
 		# no input for grouping or cluster, thus keep all in one group
@@ -110,15 +109,123 @@ preClustGrp<-function(x, grp=NULL, clusterm=NULL){
 	return(grp)
 }
 
+## main function for normized numeric intensity vectors
+biomvRmgmr<-function(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0.9, minrun=5, maxgap=2, splitLen=Inf, poolGrp=FALSE, grp=NULL, clusterm=NULL, na.rm=TRUE){
+	
+	if (!is.numeric(x) &&  !is.matrix(x) && class(x)!='GRanges') 
+        stop("'x' must be a numeric vector or matrix or a GRanges object.")
+    if(class(x)=='GRanges') {
+    	xid<-names(values(x))
+    	xRange<-x
+    	mcols(xRange)<-NULL
+    	x<-as.matrix(values(x))
+    } else if(length(dim(x))==2){
+		xid<-colnames(x)
+		x<-as.matrix(x)
+	} else {
+		warning('No dim attributes, coercing x to a matrix with 1 column !!!')
+		x <- matrix(as.numeric(x), ncol=1)
+	}
+	nr<-nrow(x) 
+	nc<-ncol(x)
+	if(is.null(xid)){
+		xid<-paste('S', seq_len(nc), sep='')
+		colnames(x)<-xid
+	}
+	
+	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
+	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
+		if(usePos=='start'){
+			xPos<-start(xRange)
+		} else if(usePos=='end'){
+			xPos<-end(xRange)
+		} else {
+			xPos<-(start(xRange)+end(xRange))/2
+		}
+	} else {
+		# no valid xRange, set it to null
+		warning('No valid xRange and usePos found, re-check if you have specified xRange / usePos.')
+		xRange<- NULL
+	} 
+	if (is.null(xPos) || !is.numeric(xPos) || length(xPos)!=nr){
+		warnings("No valid positional information found. Re-check if you have specified any xPos / xRange.")
+		xPos<-NULL
+	}
+ 
+    # check grp setting, cluster if needed, otherwise treat as one group	
+   	if(!is.null(grp)) grp<-as.character(grp)
+	grp<-preClustGrp(x, grp=grp, clusterm=clusterm)
+	
+	## build xRange if not a GRanges for the returning object
+	if(is.null(xRange) || class(xRange) != 'GRanges'){
+		if(!is.null(xRange) && class(xRange) == 'IRanges'){
+			xRange<-GRanges(seqnames='sampleseq', xRange)	
+		} else 	if(!is.null(xPos)){
+			xRange<-GRanges(seqnames='sampleseq', IRanges(start=xPos, width=1))	
+		} else {
+			xRange<-GRanges(seqnames='sampleseq', IRanges(start=seq_len(nr), width=1))	
+		}
+	}
+	# get seqnames status	
+	seqs<-unique(as.character(seqnames(xRange)))
+	## initialize the output vectors
+	res<-GRanges(); #seqlevels(res)<-seqlevels(xRange)
+	# we have more than one seq to batch
+	for(s in seq_along(seqs)){
+		cat(sprintf("Processing sequence %s\n", seqs[s]))
+		r<-which(as.character(seqnames(xRange)) == seqs[s])
+		
+		for(g in unique(grp)){
+			gi<-grp==g
+			
+			# fixme, worth thinking, if columns within one group should be pooled.
+			if(poolGrp){
+				Ilist<-maxGapminRun(x=apply(as.matrix(x[r, gi]), 1, median, na.rm=na.rm), xRange=ranges(xRange)[r], cutoff=cutoff, q=q, minrun=minrun, maxgap=maxgap, splitLen=splitLen, na.rm=na.rm)
+				if(length(Ilist$IS)>0){
+					tores<-GRanges(seqnames=as.character(seqs[s]), 
+								IRanges(start=rep(start(xRange)[r][Ilist$IS], sum(gi)), end=rep(end(xRange)[r][Ilist$IE], sum(gi))), 
+								SAMPLE=rep(xid[gi], each=length(Ilist$IS)), 
+								STATE=rep('HI', length(Ilist$IS)*sum(gi)), 
+								MEAN=sapply(which(gi), function(c) sapply(seq_along(Ilist$IS), function(t) mean(x[Ilist$IS[t]:Ilist$IE[t],c], na.rm=na.rm)))
+					)
+					res<-c(res, tores)					
+				}
+			} else {
+				for(c in which(gi)){
+				Ilist<-maxGapminRun(x=x[r,c], xRange=ranges(xRange)[r], cutoff=cutoff, q=q, minrun=minrun, maxgap=maxgap, splitLen=splitLen, na.rm=na.rm)
+				if(length(Ilist$IS)>0){
+					tores<-GRanges(seqnames=as.character(seqs[s]), 
+						IRanges(start=start(xRange)[r][Ilist$IS], end=end(xRange)[r][Ilist$IE]), 
+						SAMPLE=rep(xid[c], length(Ilist$IS)), 
+						STATE=rep('HI', length(Ilist$IS)), 
+						MEAN=as.numeric(sapply(seq_along(Ilist$IS),  function(t) mean(x[Ilist$IS[t]:Ilist$IE[t],c], na.rm=na.rm)))
+					)
+					res<-c(res, tores)	
+				}
+			}
+			
+			} # end c for
+			cat(sprintf("Building segmetation model for group %s complete\n", g))
+		} # end for g
+		cat(sprintf("Processing sequence %s complete\n", seqs[s]))
+	} # end for s
+
+	values(xRange)<-DataFrame(x,  row.names = NULL)
+	new("biomvRCNS",  
+		x = xRange, res = res,
+		param=list(maxgap=maxgap, minrun=minrun, q=q, cutoff=cutoff, splitLen=splitLen, group=grp, clusterm=clusterm, poolGrp=poolGrp, na.rm=na.rm)
+	)
+
+}
 
 
 ##################################################
 #  maxgap minrun algo, utilizing RLE, mostly for transcript detection...
 ##################################################
-maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, maxgap=2, splitLen=Inf){
+maxGapminRun<-function(x, xPos=NULL, xRange=NULL, cutoff=NULL, q=0.9, minrun=5, maxgap=2, splitLen=Inf, na.rm=TRUE){
 	# optional position vector, if not present, use index as postion
 	# output values, index of active intervals, plus func parameters 
-	na.rm=TRUE
+	
 	if(is.null(cutoff)){
 		cutoff<- as.numeric(quantile(x, q, na.rm=na.rm))
 	} else if (cutoff >= max(x, na.rm=na.rm) || cutoff<=min(x, na.rm=na.rm)) {
@@ -133,22 +240,21 @@ maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, 
 	}
 	n<-length(x)
 	
-	if(!is.null(xpos) && is.null(xrange)){
-		if(!is.numeric(xpos)) stop("xpos is not numeric!")
-		if(n!=length(xpos)) stop("the length of xpos doesnot match the length of x!")
-		if(all((xpos[-1]-xpos[-n])>maxgap) | (xpos[n]-xpos[1])<minrun)
+	if(!is.null(xPos) && is.null(xRange)){
+		if(!is.numeric(xPos)) stop("xPos is not numeric!")
+		if(n!=length(xPos)) stop("the length of xPos doesnot match the length of x!")
+		if(all((xPos[-1]-xPos[-n])>maxgap) | (xPos[n]-xPos[1])<minrun)
 			warnings("maxgap and minrun values are not approprate !!")
-	} else if (is.null(xpos) && !is.null(xrange)){
-		if(class(xrange) !='IRanges') stop("xrange is not a IRange object!")
-		if(n!=length(xrange)) stop("the length of xrange doesnot match the length of x!")
-		if(all(start(xrange)[-1]-end(xrange)[-n] > maxgap) | (end(xrange)[n]- start(xrange)[1]) < minrun)
+	} else if (is.null(xPos) && !is.null(xRange)){
+		if(class(xRange) !='IRanges') stop("xRange is not a IRange object!")
+		if(n!=length(xRange)) stop("the length of xRange doesnot match the length of x!")
+		if(all(start(xRange)[-1]-end(xRange)[-n] > maxgap) | (end(xRange)[n]- start(xRange)[1]) < minrun)
 			warnings("maxgap and minrun values are not approprate !!")
 	}
 	
 	
 	# this version of the maxgap minrun utilize Rle
 	# every 2 consecutive runs will have different sign, a merit
-	require(IRanges)
 	xlrle<-Rle(xl)
 	i<-min(which(runValue(xlrle)))
 	while(i < max(which(runValue(xlrle)))){
@@ -160,14 +266,14 @@ maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, 
 		nr<-length(runValue(xlrle))
 		if(i == nr){
 			break
-		} else if(	(is.null(xpos) && is.null(xrange) && rl[i+1]<=maxgap) ||
-						(!is.null(xpos) && is.null(xrange) && xpos[erl[i+1]]-xpos[erl[i]]<=maxgap) ||
-						(is.null(xpos) && !is.null(xrange) && start(xrange)[erl[i+1]]-end(xrange)[erl[i]]<=maxgap) && (i+1)<nr ){
+		} else if(	(is.null(xPos) && is.null(xRange) && rl[i+1]<=maxgap) ||
+						(!is.null(xPos) && is.null(xRange) && xPos[erl[i+1]]-xPos[erl[i]]<=maxgap) ||
+						(is.null(xPos) && !is.null(xRange) && start(xRange)[erl[i+1]]-end(xRange)[erl[i]]<=maxgap) && (i+1)<nr ){
 			# the next F interval is shorter than maxgap, and there is one T interval still hanging 
 			# the gap distance is calculated as the distance between the end of the last True in run i to the last FALSE in the run i+1, half open
-			if(	(is.null(xpos) && is.null(xrange) && sum(rl[i:min(i+2, nr)])<=splitLen) ||
-				(!is.null(xpos) && is.null(xrange) && xpos[erl[min(i+2, nr)]]-xpos[erl[i]] <=splitLen) ||
-				(is.null(xpos) && !is.null(xrange) && end(xrange)[erl[min(i+2, nr)]]-start(xrange)[erl[i]]<=splitLen) ){ 
+			if(	(is.null(xPos) && is.null(xRange) && sum(rl[i:min(i+2, nr)])<=splitLen) ||
+				(!is.null(xPos) && is.null(xRange) && xPos[erl[min(i+2, nr)]]-xPos[erl[i]] <=splitLen) ||
+				(is.null(xPos) && !is.null(xRange) && end(xRange)[erl[min(i+2, nr)]]-start(xRange)[erl[i]]<=splitLen) ){ 
 				#the accumulative length of this interval including this F interval is shorter than the splitLen, merge
 				runValue(xlrle)[(i+1)]<-TRUE
 			} else {
@@ -184,23 +290,19 @@ maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, 
 	erl<-cumsum(rl) 
 	srl<-erl-rl+1 
 	nr<-length(runValue(xlrle))
-	if(!is.null(xpos)){
-		ri<-which(rv & xpos[erl]-xpos[srl]>= minrun)
-	} else if (!is.null(xrange)){
-		ri<-which(rv & end(xrange)[erl]-start(xrange)[srl]>= minrun)
+	if(!is.null(xPos)){
+		ri<-which(rv & xPos[erl]-xPos[srl]>= minrun)
+	} else if (!is.null(xRange)){
+		ri<-which(rv & end(xRange)[erl]-start(xRange)[srl]>= minrun)
 	} else {
 		ri<-which(rv & rl>=minrun)
 	}
 	if(length(ri)>0){
 		intStart<-sapply(ri, function(z) sum(rl[seq_len(z-1)])+1)
 		intEnd<-sapply(ri, function(z) sum(rl[seq_len(z)]))
-		#?fixme, when the first position has value above cutoff and the xpos[1] has value > then minrun, then this positon will be included as 0~xpos[1] is considered a valid run.
-#		if(intEnd[1]==1 && intStart[1]==1){
-#			intEnd<-intEnd[-1]
-#			intStart<-intStart[-1]
-#		}
+		
 		## solve neighbouring probes which are both true, but too far away
-		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xpos=xpos, xrange=xrange, maxgap=maxgap, minrun=minrun)
+		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xPos=xPos, xRange=xRange, maxgap=maxgap, minrun=minrun)
 		intStart<-tmp$IS
 		intEnd<-tmp$IE
 	} else {
@@ -212,18 +314,17 @@ maxgapminrun<-function(x, xpos=NULL, xrange=NULL, cutoff=NULL, q=0.9, minrun=5, 
 ##################################################
 # helper function to split far away neighbouring items
 ##################################################
-splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xpos=NULL, xrange=NULL, maxgap=Inf, minrun=1){
-	if(!is.null(xrange) && class(xrange)=='GRanges' || class(xrange)== 'IRanges') xpos<-NULL
-	if(!is.null(xpos) || !is.null(xrange) && !is.null(intStart) && !is.null(intEnd) && length(intEnd)==length(intStart)){
-		if(!is.null(xpos)){
-			n<-length(xpos)
-			gapStart<-which((xpos[-1]-xpos[-n])>maxgap)
+splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xPos=NULL, xRange=NULL, maxgap=Inf, minrun=1){
+	if(!is.null(xRange) && class(xRange)=='GRanges' || class(xRange)== 'IRanges') xPos<-NULL
+	if(!is.null(xPos) || !is.null(xRange) && !is.null(intStart) && !is.null(intEnd) && length(intEnd)==length(intStart)){
+		if(!is.null(xPos)){
+			n<-length(xPos)
+			gapStart<-which((xPos[-1]-xPos[-n])>maxgap)
 		} else {
-			n<-length(xrange)
-			gapStart<-which((start(xrange)[-1]-end(xrange)[-n])>maxgap)	
+			n<-length(xRange)
+			gapStart<-which((start(xRange)[-1]-end(xRange)[-n])>maxgap)	
 		}
 		gapEnd<-gapStart+1
-		require(IRanges)
 		gapir<-IRanges(start=gapStart, end=gapEnd)
 		gapir<-reduce(gapir)
 		intN<-length(intStart)
@@ -239,35 +340,35 @@ splitFarNeighbour<-function(intStart=NULL, intEnd=NULL, xpos=NULL, xrange=NULL, 
 						#there are more than one
 						if(g==1){
 							# the 1st gap in this interval
-							if(	(!is.null(xpos) && xpos[gapStart[splitgap[g]]]-xpos[intStart[i]]>=minrun) ||
-								(!is.null(xrange) && end(xrange)[gapStart[splitgap[g]]]-start(xrange)[intStart[i]]>=minrun) ){
+							if(	(!is.null(xPos) && xPos[gapStart[splitgap[g]]]-xPos[intStart[i]]>=minrun) ||
+								(!is.null(xRange) && end(xRange)[gapStart[splitgap[g]]]-start(xRange)[intStart[i]]>=minrun) ){
 								#split first half	
 								toadd<-c(toadd, intStart[i], gapStart[splitgap[g]])
 							}
 						}
 						if (g==ngap){
 							# the last gap in this interval
-							if(	(!is.null(xpos) && xpos[intEnd[i]]-xpos[gapEnd[splitgap[g]]]>=minrun) ||
-								(!is.null(xrange) && end(xrange)[intEnd[i]]-start(xrange)[gapEnd[splitgap[g]]]>=minrun) ){
+							if(	(!is.null(xPos) && xPos[intEnd[i]]-xPos[gapEnd[splitgap[g]]]>=minrun) ||
+								(!is.null(xRange) && end(xRange)[intEnd[i]]-start(xRange)[gapEnd[splitgap[g]]]>=minrun) ){
 								#split second half
 								toadd<-c(toadd, gapEnd[splitgap[g]], intEnd[i])
 							}
 						} else{
-							if(	(g+1)<ngap &&	(!is.null(xpos) && xpos[gapStart[splitgap[g+1]]]-xpos[gapEnd[splitgap[g]]]>=minrun) ||
-								(!is.null(xrange) && end(xrange)[gapStart[splitgap[g+1]]]-start(xrange)[gapEnd[splitgap[g]]]>=minrun) ){
+							if(	(g+1)<ngap &&	(!is.null(xPos) && xPos[gapStart[splitgap[g+1]]]-xPos[gapEnd[splitgap[g]]]>=minrun) ||
+								(!is.null(xRange) && end(xRange)[gapStart[splitgap[g+1]]]-start(xRange)[gapEnd[splitgap[g]]]>=minrun) ){
 								#split second half
 								toadd<-c(toadd, gapEnd[splitgap[g]], gapStart[splitgap[g+1]])
 							}
 						}
 					} else {
 						# there is only one gap within this interval
-						if(	(!is.null(xpos) && xpos[gapStart[g]]-xpos[intStart[i]]>=minrun) ||
-							(!is.null(xrange) && end(xrange)[gapStart[g]]-start(xrange)[intStart[i]]>=minrun) ){
+						if(	(!is.null(xPos) && xPos[gapStart[g]]-xPos[intStart[i]]>=minrun) ||
+							(!is.null(xRange) && end(xRange)[gapStart[g]]-start(xRange)[intStart[i]]>=minrun) ){
 							#split first half	
 							toadd<-c(toadd, intStart[i], gapStart[splitgap[g]])
 						}
-						if( (!is.null(xpos) && xpos[intEnd[i]]-xpos[gapEnd[splitgap[g]]]>=minrun) ||
-							(!is.null(xrange) && end(xrange)[intEnd[i]]-start(xrange)[gapEnd[splitgap[g]]]>=minrun) ){
+						if( (!is.null(xPos) && xPos[intEnd[i]]-xPos[gapEnd[splitgap[g]]]>=minrun) ||
+							(!is.null(xRange) && end(xRange)[intEnd[i]]-start(xRange)[gapEnd[splitgap[g]]]>=minrun) ){
 							#split second half
 							toadd<-c(toadd, gapEnd[splitgap[g]], intEnd[i])
 						}
@@ -294,16 +395,16 @@ gammaFit<-function(x, wt=NULL){
 	tmp <- cov.wt(data.frame(x),wt=wt)
     shape0 <- (tmp$center/sqrt(tmp$cov))^2
     scale<-as.numeric(tmp$center)
-    shape<-optimize(function(shape) sum(dgamma(x,shape=shape, scale=scale,  log=TRUE)*wt), c(shape0-sqrt(tmp$cov), shape0+sqrt(tmp$cov)) , maximum = TRUE)[[1]]
+    shape<-optimize(function(shape) sum(dgamma(x,shape=shape, scale=scale,  log=TRUE)*wt, na.rm=TRUE), c(.Machine$double.eps, 1.5*shape0) , maximum = TRUE)[[1]]
 	return(c(shape=shape, scale=scale))
 }
 
 poisFit <- function(x, wt=NULL, maxshift=1) {  	
-	if(maxshift>min(x)) stop("maxshift can't be greater than the minimum of x !")
+#	if(maxshift>min(x)) stop("maxshift can't be greater than the minimum of x !")
 	if(is.null(wt)) wt <- rep(1/length(x),length(x))
 	if(length(x) != length(wt)) stop("length of x and wt differ!")
 	
-	shift<-which.max(sapply(1:maxshift, function(s) dpois(x = x-s, lambda=(x-s) %*% wt,log=TRUE) %*% wt))
+	shift<-which.max(sapply(1:maxshift, function(s) sum(dpois(x = x-s, lambda=(x-s) %*% wt,log=TRUE) %*% wt, na.rm=T)))
 	lambda <- (x-shift) %*% wt 
     return(c(shift=shift, lambda=lambda))
 }
@@ -325,5 +426,5 @@ nbinomCLLDD<-function(x, wt=NULL, s=1){
 	m <- weighted.mean(x-s,wt)
 	v <- as.numeric(cov.wt(data.frame(x-s),wt=wt)$cov)
 	size <- if (v > m) m^2/(v - m) else 100
-	optim(c(size,m),function(par) sum(dnbinom(x-s,size=par[1],mu=par[2],log=TRUE)*wt)  ,control=list(fnscale=-1,reltol=1e-4,maxit=10000))
+	optim(c(size,m),function(par) sum(dnbinom(x-s,size=par[1],mu=par[2],log=TRUE)*wt, na.rm=TRUE)  ,lower=.Machine$double.eps, method='L-BFGS-B', control=list(fnscale=-1,maxit=1000))
 }

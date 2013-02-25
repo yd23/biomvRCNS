@@ -5,23 +5,10 @@
 ##################################################
 # re-implement HSMM, one more slot to handle distance array
 ##################################################
-biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', xAnno=NULL, soj.type='gamma', emis.type='norm', q.alpha=0.05, r.var=0.75, maxit=1000, maxgap=Inf, tol=1e-04, grp=NULL, clusterm=NULL, na.rm=TRUE){
+biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', emis.type='norm', xAnno=NULL, soj.type='gamma', q.alpha=0.05, r.var=0.75, maxit=1000, maxgap=Inf, tol=1e-06, grp=NULL, clusterm=NULL, na.rm=TRUE){
 	## input checking
-	# x, matrix/range like
-	# xPos, x feature information if x is not a grange object; so for count data, x should be a GRange , for other continous data, a matrix /  Grange
-	# maxk, maximum possible stays of a states; maxbp, maximum possible duration of stay in bp, give xPos has the coordinates.
-	# J, number of states
-	# xAnno, dataframe/range like object contains the same number of features for x data rows, then consider to lock sojourn dist
-	# soj.type, sojourn dist type
-	# family, whether a array like normal/t, or sequencing like poisson/nbinom
-	# maxit, max itration 
-	# ints, prior information, need more, see core.r	#fixme
 	# lock.transition / lock.d, lock transition and sojourn #fixme
 	# est.method=c('viterbi', 'smooth')
-	
-	#  tol=1e-4
-	#  ksmooth.thresh = 1e-20 #this is a threshold for which d(u) values to use - if we throw too many weights in the default density() seems to work quite poorly
-	#  shiftthresh = 1e-20 #threshold for effective "0" when considering d(u)	
 	
 	if (!is.numeric(x) &&  !is.matrix(x) && class(x)!='GRanges') 
         stop("'x' must be a numeric vector or matrix or a GRanges object.")
@@ -34,13 +21,15 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		xid<-colnames(x)
 		x<-as.matrix(x)
 	} else {
-		warning('no dim attributes, coercing x to a matrix with 1 column !!!')
+		warning('No dim attributes, coercing x to a matrix with 1 column !!!')
 		x <- matrix(as.numeric(x), ncol=1)
-		xid<-paste('S', seq_len(nc), sep='')
-		colnames(x)<-xid
 	}
 	nr<-nrow(x) 
 	nc<-ncol(x)
+	if(is.null(xid)){
+		xid<-paste('S', seq_len(nc), sep='')
+		colnames(x)<-xid
+	}
 	
 	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
 	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
@@ -78,9 +67,14 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		if(is.null(maxbp)){
 			# estimating a reasonable number for maxbp
 #			fixme, this is related to the soj type, now only have gamma avaliable
-			maxbp<-ceiling(median(sapply(1:J, function(j) soj$shape[j]*soj$scale[j])))	
+			maxbp<- switch(soj.type,
+				nbinom = ceiling(median(soj$mu)),
+				pois = ceiling(median(soj$lambda)),
+				gamma = ceiling(median(soj$shape*soj$scale)),
+				stop("Invalid argument value for 'soj.type'! ")
+			)
 		}
-		soj<-append(soj, maxbp=maxbp) 
+#		soj<-append(soj, maxbp=maxbp) 
 	} else if(is.numeric(J) && J>1){
 		cat('xAnno is not present or not supported, try to use maxbp/maxk in the uniform prior for the sojourn distribution!\n') 
 		# J is ok
@@ -152,12 +146,12 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 			if(iterative){
 				for(c in which(gi)){
 					cat(sprintf("step 1 building HSMM for seq %s in column %s.\n", seqs[s], c))
-					runout<-biomvRhsmmRun(x[r,c], xid[c], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap) 	
+					runout<-biomvRhsmmRun(x[r,c], xid[c], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap,  tol=tol, na.rm=na.rm) 	
 					res<-c(res, runout$res)
 					state[r, c]<-runout$yhat
 				}
 			} else {
-				runout<-biomvRhsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap)	
+				runout<-biomvRhsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap, tol=tol, na.rm=na.rm)	
 				res<-c(res, runout$res)
 				state[r, gi]<-runout$yhat
 			}
@@ -175,7 +169,7 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 
 
 
-biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05, r.var=0.75, maxit=1, maxgap=Inf, na.rm=TRUE){
+biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05, r.var=0.75, maxit=1, maxgap=Inf, tol= 1e-6, na.rm=TRUE){
 	# now x should be a one column matrix
 	if(is.null(dim(x))) x<-matrix(x); colnames(x)<-xid
 	nr<-nrow(x)
@@ -209,7 +203,7 @@ biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alph
 		B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
 				  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
 				  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
-				  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='bioCNS')
+				  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='biomvRCNS')
 
 		#check gamma and eta
 #		if(any(is.nan(B$L))) {
@@ -217,7 +211,7 @@ biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alph
 #		  return(B)
 #		}
 		if(any(B$L<0)) B$L = zapsmall(B$L)      
-#					if(any(B$eta<0)) B$eta = zapsmall(B$eta)      
+#		if(any(B$eta<0)) B$eta = zapsmall(B$eta)      
 #					if(any(B$N<0))  B$N = zapsmall(B$N)		
 
 		#update initial prob PI, transition >=0 check
@@ -233,7 +227,7 @@ biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alph
 
 		# loglikelihood for this it, using B$N
 		ll[it]<-sum(log(B$N))
-		if( it>1 && abs(ll[it]-ll[it-1]) < tol) {
+		if( it>1 && abs(ll[it]-ll[it-1]) < 1e-4) {
 			break()	
 		}
 	}	 # end for maxit
@@ -245,7 +239,7 @@ biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alph
 	}
 
 	# setup this new res gr
-	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=ranges(xRange), maxgap=Inf, state=j)))
+	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=xRange, maxgap=Inf, state=j)))
 	names(Ilist)<-unique(yhat)
 	res<- do.call('c', 
 					lapply(unique(yhat), function(j)
@@ -336,6 +330,14 @@ sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){
 	# must ensure there are at least 2 for each state ? todo
 		
 	if(class(xAnno) == 'TranscriptDb') {
+		
+		   
+	   if(length(find.package('GenomicFeatures', quiet=T))==0) {
+			stop("'GenomicFeatures' is not found !!!")
+		} else {
+			require(GenomicFeatures)
+		}
+		
 		J<-3
 		fttypes<-c('intergenic', 'intron', 'exon')
 		#3 feature type, exon, intron, intergenic
@@ -453,7 +455,7 @@ initSojDd <- function(soj, B=NULL) {
 			for(j in 1:J) {           
 				param <- gammaFit(dposV[idx],wt=soj$d[idx,j])
 				soj$shape[j] <- param['shape']
-				soj$scale[j] <- param['scale']     	  
+				soj$scale[j] <- param['scale'] 	  
 			}
 		}	          
 		if(!is.null(soj$shape) && !is.null(soj$scale) && length(soj$shape)==J && length(soj$scale)==J) {
@@ -469,9 +471,10 @@ initSojDd <- function(soj, B=NULL) {
 			
 			ftidx<-apply(soj$d, 2, function(xc) xc >.Machine$double.eps & idx)
 			maxshift<- sapply( 
-				sapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
+				lapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
 				function(ic) min(dposV[seq(from=min(ic[ic>0]), to=nb*maxk, by=maxk)])
 			)
+			cat(maxshift, '\n')
 			for(j in 1:J) { 
 				param <- poisFit(dposV[ftidx[,j]], wt=soj$d[ftidx[,j],j], maxshift=maxshift[j])
 				soj$size[j] <- param['size']
@@ -492,7 +495,6 @@ initSojDd <- function(soj, B=NULL) {
 			soj$shift <- soj$size <- soj$mu <- numeric(J)    
 			
 			ftidx<-apply(soj$d, 2, function(xc) xc >.Machine$double.eps & idx)
-			show(okidx)
 			maxshift<- sapply( 
 				lapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
 				function(ic) min(dposV[seq(from=min(ic[ic>0]), to=nb*maxk, by=maxk)])
@@ -594,7 +596,8 @@ initEmis<-function(emis, x, B=NULL){
 			emis$mu <- sapply(tmp, function(l) l['cneter'])
 			emis$cov <- sapply(tmp, function(l) l['cov'])
 		} else if (emis$type == 'pois'){
-			emis$lambda = sapply(1:J, function(j) weighted.mean(x, B$L[((j-1)*nr+1):(j*nr)]) )
+			isa <- !is.na(x)
+			emis$lambda <- apply(matrix(B$L,ncol=J), 2, function(cv) weighted.mean(matrix(x[isa]), cv[isa]))
 		} else if (emis$type == 'norm'){
 			isa <- !is.na(x)
 			tmp <- apply(matrix(B$L,ncol=J), 2, function(cv) unlist(cov.wt(matrix(x[isa]), cv[isa])[c('cov', 'center')])) # x is already a matrix 
@@ -606,7 +609,6 @@ initEmis<-function(emis, x, B=NULL){
 }	
 
 splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=NULL){
-	require(IRanges)
 	yhatrle<-Rle(yhat)
 	rv<-runValue(yhatrle)
 	rl<-runLength(yhatrle)
@@ -615,7 +617,7 @@ splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=
 	intEnd<-sapply(ri, function(z) sum(rl[seq_len(z)]))
 
 	if(length(intStart)>0 && !is.null(maxgap) && !is.null(xPos) || !is.null(xRange)){
-		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xpos=xPos, xrange=xRange, maxgap=maxgap)
+		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xPos=xPos, xRange=xRange, maxgap=maxgap)
 		intStart<-tmp$IS
 		intEnd<-tmp$IE		
 	}
