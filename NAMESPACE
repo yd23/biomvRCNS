@@ -3,9 +3,10 @@ useDynLib(biomvRCNS, .registration = TRUE)
 import(IRanges,GenomicRanges, Gviz, mvtnorm)
 
 export(
-	biomvRhsmm, biomvRhsmmRun, sojournAnno,
+	biomvRhsmm, hsmmRun, sojournAnno,
 	biomvRseg, regionSegCost, regionSegAlphaNB,
-	biomvRGviz, maxgapminrun, splitFarNeighbour
+	biomvRmgmr, maxGapminRun,
+	biomvRGviz, splitFarNeighbour, simmvRsegData
 )
 
 exportMethods(

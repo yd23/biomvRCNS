@@ -165,7 +165,6 @@
 
 
 
-
 biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID='regionID', seggr=NULL, plotstrand='+', eps=TRUE, tofile=TRUE,showId=TRUE, ...){
 	# exprgr, probe info, with first data column as expression value
 	# gmgr,  related annotation data, optional, a TYPE mcol has to be there...fragile
@@ -260,6 +259,7 @@ biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID='regionID', seggr=
 
 	# start ploting
 	# initial grapic dev.
+	
 	if(tofile){
 		graphics.off()
 		if(eps){
@@ -269,10 +269,12 @@ biomvRGviz<-function(exprgr, gmgr=NULL, prange=NULL, regionID='regionID', seggr=
 			pdf(paste(main, '.', plotstrand, '.pdf', sep=''), width=25, height=10)
 		}
 		# append general plotting params.
-		params <- append(params, list(fontsize=20, cex.title=1.5, main=main))
+		# min.distance = 0, min.width = 0, to distinguish adjacent feature within the same group, not sure if there will be unexpected side effects or not.
+		params <- append(params, list(fontsize=20, cex.title=1.5, main=main, min.distance = 0, min.width = 0)) 
 		do.call(plotTracks,c(list(trackList), params)) 
 		dev.off()
 	} else {
+		params <- append(params, list(main=main, min.distance = 0, min.width = 0)) 
 		do.call(plotTracks,c(list(trackList), params)) 
 	}
 }

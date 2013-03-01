@@ -5,7 +5,7 @@
 ##################################################
 # re-implement HSMM, one more slot to handle distance array
 ##################################################
-biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', emis.type='norm', xAnno=NULL, soj.type='gamma', q.alpha=0.05, r.var=0.75, maxit=1000, maxgap=Inf, tol=1e-06, grp=NULL, clusterm=NULL, na.rm=TRUE){
+biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', emis.type='norm', xAnno=NULL, soj.type='gamma', q.alpha=0.05, r.var=0.75, cMethod='BandF', maxit=1, maxgap=Inf, tol=1e-06, grp=NULL, clusterm=NULL, na.rm=TRUE){
 	## input checking
 	# lock.transition / lock.d, lock transition and sojourn #fixme
 	# est.method=c('viterbi', 'smooth')
@@ -21,13 +21,15 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		xid<-colnames(x)
 		x<-as.matrix(x)
 	} else {
-		warning('no dim attributes, coercing x to a matrix with 1 column !!!')
+		warning('No dim attributes, coercing x to a matrix with 1 column !!!')
 		x <- matrix(as.numeric(x), ncol=1)
-		xid<-paste('S', seq_len(nc), sep='')
-		colnames(x)<-xid
 	}
 	nr<-nrow(x) 
 	nc<-ncol(x)
+	if(is.null(xid)){
+		xid<-paste('S', seq_len(nc), sep='')
+		colnames(x)<-xid
+	}
 	
 	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
 	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
@@ -144,12 +146,12 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 			if(iterative){
 				for(c in which(gi)){
 					cat(sprintf("step 1 building HSMM for seq %s in column %s.\n", seqs[s], c))
-					runout<-biomvRhsmmRun(x[r,c], xid[c], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap,  tol=tol, na.rm=na.rm) 	
+					runout<-hsmmRun(x[r,c], xid[c], xRange[r], ssoj, emis.type, q.alpha, r.var, cMethod, maxit, maxgap,  tol, na.rm=na.rm) 	
 					res<-c(res, runout$res)
 					state[r, c]<-runout$yhat
 				}
 			} else {
-				runout<-biomvRhsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, emis.type, q.alpha, r.var, maxit, maxgap, tol=tol, na.rm=na.rm)	
+				runout<-hsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, emis.type, q.alpha, r.var, cMethod, maxit, maxgap, tol, na.rm=na.rm)	
 				res<-c(res, runout$res)
 				state[r, gi]<-runout$yhat
 			}
@@ -161,19 +163,18 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 	values(xRange)<-DataFrame(x, state, row.names = NULL)
 	new("biomvRCNS",  
 		x = xRange, res = res,
-		param=list(J=J, maxk=maxk, maxbp=maxbp, maxgap=maxgap, soj.type=soj.type, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var, iterative=iterative, maxit=maxit, tol=tol, group=grp, clusterm=clusterm, na.rm=na.rm)
+		param=list(J=J, maxk=maxk, maxbp=maxbp, maxgap=maxgap, soj.type=soj.type, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var, iterative=iterative, cMethod=cMethod, maxit=maxit, tol=tol, group=grp, clusterm=clusterm, na.rm=na.rm)
 	)
 }
 
 
 
-biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05, r.var=0.75, maxit=1, maxgap=Inf, tol= 1e-6, na.rm=TRUE){
+hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05, r.var=0.75, cMethod='BandF', maxit=1, maxgap=Inf, tol= 1e-6, na.rm=TRUE){
 	# now x should be a one column matrix
 	if(is.null(dim(x))) x<-matrix(x); colnames(x)<-xid
 	nr<-nrow(x)
 	J<-soj$J
 	maxk<-soj$maxk
-	
 	
 	# create default uniform initial probablity
 	init<-rep(1/J, J) # start with uniform
@@ -189,53 +190,50 @@ biomvRhsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alph
 	} else if (emis$type == 'pois'){
 		emis$lambda  <- estEmisMu(x, J, q.alpha=q.alpha)
 	}
+	if(cMethod=='BandF'){
+		#estimation of most likely state sequence
+		# switch est.method   viterbi , .C /  smooth
+		#define likelihood
+		ll <- rep(NA,maxit)
+		# start MM iteration
+		for(it in 1:maxit) {
+			# reestimationg of emmision   
+			emis<-initEmis(emis=emis, x=x)
+			B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
+					  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
+					  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
+					  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J), PACKAGE='biomvRCNS')
+
+			#update initial prob PI, transition >=0 check
+			init<-B$pihat
+			init[init<0]<-0
+			trans <- matrix(B$ahat,ncol=J)
+			trans[trans<0] <- 0
 	
-	#estimation of most likely state sequence
-	# switch est.method   viterbi , .C /  smooth
-	#define likelihood
-	ll <- rep(NA,maxit)
-	# start MM iteration
-	for(it in 1:maxit) {
-		# reestimationg of emmision   
+			#update emision according to the new estimated distribution paramenters using B$L
+			emis<-initEmis(emis=emis, x=x, B=B)
+			# update sojourn dD, using B$eta
+			soj<-initSojDd(soj=soj, B=B)
+
+			# loglikelihood for this it, using B$N
+			ll[it]<-sum(log(B$N))
+			if( it>1 && abs(ll[it]-ll[it-1]) < tol) {
+				break()	
+			}
+		}	 # end for maxit
+		## assign states and split if necessary.
+		yhat<-apply(matrix(B$L,ncol=J),1,which.max)
+	} else if (cMethod=='Viterbi'){
 		emis<-initEmis(emis=emis, x=x)
-		B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
-				  maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
-				  eta = double(nrow(soj$d)*J), L=double(nr*J), N=double(nr), ahat=double(J*J), pihat=double(J),
-				  F=double(nr*J), G=double(nr*J), L1 = double(nr*J), si=double(nr*J))#, PACKAGE='biomvRCNS')
-
-		#check gamma and eta
-#		if(any(is.nan(B$L))) {
-#		  warnings("NaNs detected in gamma.  Exiting...")
-#		  return(B)
-#		}
-		if(any(B$L<0)) B$L = zapsmall(B$L)      
-#					if(any(B$eta<0)) B$eta = zapsmall(B$eta)      
-#					if(any(B$N<0))  B$N = zapsmall(B$N)		
-
-		#update initial prob PI, transition >=0 check
-		init<-B$pihat
-		init[init<0]<-0
-		trans <- matrix(B$ahat,ncol=J)
-		trans[trans<0] <- 0
-	
-		#update emision according to the new estimated distribution paramenters using B$gamma sample in  (mstep(x,matrix(B$gamma,ncol=J))))	
-		emis<-initEmis(emis=emis, x=x, B=B)
-		# update sojourn dD, using eta(nonparametric), eta+d (ksmoothed-nonparametric), eta+d+shift(poisson), eta(nbinom), eta(gamma)
-		soj<-initSojDd(soj=soj, B=B)
-
-		# loglikelihood for this it, using B$N
-		ll[it]<-sum(log(B$N))
-		if( it>1 && abs(ll[it]-ll[it-1]) < 1e-4) {
-			break()	
-		}
-	}	 # end for maxit
-	## assign states and split if necessary.
-	if(is.null(soj$fttypes)){
-		yhat<-as.character(apply(matrix(B$L,ncol=J),1,which.max))
-	} else {
-		yhat<-soj$fttypes[apply(matrix(B$L,ncol=J),1,which.max)]
+		V  = .C("viterbi", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
+          maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
+          alpha = double(nr*J), shat=integer(nr), si=double(nr*J), opt=integer(nr*J), ops=integer(nr*J), PACKAGE='biomvRCNS')
+        yhat<-V$shat+1
 	}
-
+	if(!is.null(soj$fttypes)){
+		yhat<-soj$fttypes[yhat]
+	}
+	yhat<-as.character(yhat)
 	# setup this new res gr
 	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=xRange, maxgap=Inf, state=j)))
 	names(Ilist)<-unique(yhat)
@@ -453,7 +451,7 @@ initSojDd <- function(soj, B=NULL) {
 			for(j in 1:J) {           
 				param <- gammaFit(dposV[idx],wt=soj$d[idx,j])
 				soj$shape[j] <- param['shape']
-				soj$scale[j] <- param['scale']     	  
+				soj$scale[j] <- param['scale'] 	  
 			}
 		}	          
 		if(!is.null(soj$shape) && !is.null(soj$scale) && length(soj$shape)==J && length(soj$scale)==J) {
@@ -469,9 +467,10 @@ initSojDd <- function(soj, B=NULL) {
 			
 			ftidx<-apply(soj$d, 2, function(xc) xc >.Machine$double.eps & idx)
 			maxshift<- sapply( 
-				sapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
+				lapply(1:J, function(j)  which(ftidx[,j]) %% maxk ), 
 				function(ic) min(dposV[seq(from=min(ic[ic>0]), to=nb*maxk, by=maxk)])
 			)
+			cat(maxshift, '\n')
 			for(j in 1:J) { 
 				param <- poisFit(dposV[ftidx[,j]], wt=soj$d[ftidx[,j],j], maxshift=maxshift[j])
 				soj$size[j] <- param['size']
@@ -599,9 +598,10 @@ initEmis<-function(emis, x, B=NULL){
 			isa <- !is.na(x)
 			tmp <- apply(matrix(B$L,ncol=J), 2, function(cv) unlist(cov.wt(matrix(x[isa]), cv[isa])[c('cov', 'center')])) # x is already a matrix 
 			emis$mu <- tmp['center',]
-			emis$var <- tmp['cov', ]				
+			emis$var <- tmp['cov', ]		
 		}
 	}
+	
 	return(emis)
 }	
 
@@ -614,7 +614,7 @@ splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=
 	intEnd<-sapply(ri, function(z) sum(rl[seq_len(z)]))
 
 	if(length(intStart)>0 && !is.null(maxgap) && !is.null(xPos) || !is.null(xRange)){
-		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xpos=xPos, xrange=xRange, maxgap=maxgap)
+		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xPos=xPos, xRange=xRange, maxgap=maxgap)
 		intStart<-tmp$IS
 		intEnd<-tmp$IE		
 	}

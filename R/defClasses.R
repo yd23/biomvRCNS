@@ -106,7 +106,7 @@ setMethod("plot", "biomvRCNS",
 	function(x, ...) {
 		for(s in unique(values(x@res)[,'SAMPLE'])){
 			for(seq in as.character(unique(seqnames(x@x)))){
-				biomvRGviz(exprgr=x@x[seqnames(x@x)==seq, s], seggr=x@res[values(x@res)[,'SAMPLE']==s], plotstrand='+',...) 
+				biomvRGviz(exprgr=x@x[seqnames(x@x)==seq, s], seggr=x@res[values(x@res)[,'SAMPLE']==s],...) 
 			}
 		}
 	})	

@@ -1,10 +1,10 @@
 \name{sojournAnno}
 \alias{sojournAnno}
 \title{
-	Estimation sojourn distribution parameters from posterior annoation data distribution
+	Estimation sojourn distribution parameters from posterior information like annotation data
 }
 \description{
-	Using prior information from previous studies or annoation data  to determine sojourn distribution parameters
+	Using prior information from previous studies or annotation data  to determine sojourn distribution parameters
 }
 \usage{
 sojournAnno(xAnno, soj.type = "gamma", pbdist = NULL)
@@ -22,7 +22,7 @@ sojournAnno(xAnno, soj.type = "gamma", pbdist = NULL)
 }
 }
 \details{
-	Be default, the hidden-semi markov model implemented in this package uses a uniform prior for the initial sojourn distribution. However user can provide custom data from related studies to learn the prior of the sojourn distribution. The number of possible state will also be estimated from the unique level of feature type in the first meta column of \code{xAnno}.
+	Be default, the hidden-semi Markov model implemented in this package uses a uniform prior for the initial sojourn distribution. However user can provide custom data from related studies to learn the prior of the sojourn distribution. The number of possible state will also be estimated from the unique level of feature type in the first meta column of \code{xAnno} if it is not a \code{TranscriptDb} object.
 }
 \value{
 	a list object containing the sojourn distribution parameter

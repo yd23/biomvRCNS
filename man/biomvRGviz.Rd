@@ -5,7 +5,7 @@
 }
 \description{
   This function could be called to plot segmentation output, together with the input signal and optional annotation. By default resulting image will be printed to file.
-  The plot method for class \code{\link{biomvRCNS}} also calls this method  See the vignette for a more complete example.
+  The plot method for class \code{\link{biomvRCNS}} also calls this method . See the vignette for a more complete example.
 }
 \usage{
 biomvRGviz(exprgr, gmgr = NULL, prange = NULL, regionID = "regionID", seggr = NULL, plotstrand = "+", eps = TRUE, tofile = TRUE, showId = TRUE, ...)
@@ -19,10 +19,10 @@ biomvRGviz(exprgr, gmgr = NULL, prange = NULL, regionID = "regionID", seggr = NU
 	an optional GRanges object for the annotation, which must have one column named 'TYPE' in its meta DataFrame
 }
   \item{prange}{
-	an optional vecter defining the scope of the plot, the first 3 elements must be formated as c('seqname', 'start_position', 'end_position')
+	an optional vecter defining the scope of the plot, the first 3 elements must be formatted as c('seqname', 'start_position', 'end_position')
 }
   \item{regionID}{
-	a character for the name of the ploted region or gene name or other identifier, will be used in the title of the plot and the ouput file name
+	a character for the name of the plotted region or gene name or other identifier, will be used in the title of the plot and the output file name
 }
   \item{seggr}{
 	a GRanges object for the segmentation output, which must have one column named 'STATE' in its meta DataFrame
@@ -31,24 +31,29 @@ biomvRGviz(exprgr, gmgr = NULL, prange = NULL, regionID = "regionID", seggr = NU
 	select which strand to plot, possible values are '+', '-', '*'
 }
   \item{eps}{
-	whether to ouput .eps file using postscript, if FALSE then pdf files for each sequence will be generated to the current working folder.
+	whether to output EPS file using postscript, if FALSE then PDF files for each sequence will be generated to the current working folder.
 }
   \item{tofile}{
-	whether to output graphics file, if FALSE then will plot on the active devive.
+	whether to output graphics file, if FALSE then will plot on the active device.
 }
   \item{showId}{
-	whether names in gmgr and 'STATE' value in seggr are shown on the plot.
+	whether names in \code{gmgr} and 'STATE' value in \code{seggr} are shown on the plot.
 }
   \item{...}{
 	other arguments for \code{plot}
 }
 }
 \details{
-	See the vignette for a more details and examples.
+	See the vignette for more details and examples.
 }
 \value{
 	Plot graph on the active device or output to EPS/PDF file.
 }
+
+\author{
+Yang Du
+}
+
 
 \examples{
 	data(coriell)
@@ -57,11 +62,12 @@ biomvRGviz(exprgr, gmgr = NULL, prange = NULL, regionID = "regionID", seggr = NU
 	values(xgr)<-DataFrame(x[,4:5], row.names=NULL)
 	xgr<-xgr[order(xgr)]
 
-	J<-2 ; maxk<-50
-	soj<-list(J=J, maxk=maxk, type='nbinom', d=cbind(dunif(1:maxk, 1, maxk), dunif(1:maxk, 1, maxk)))
+	J<-2; maxk<-50
+	# a uniform inital sojourn, not utilizing positional information
+	soj<-list(J=J, maxk=maxk, type='gamma', d=cbind(dunif(1:maxk, 1, maxk), dunif(1:maxk, 1, maxk)))
 	soj$D <- sapply(1:J, function(j) rev(cumsum(rev(soj$d[1:maxk,j]))))
 	sample<-colnames(coriell)[4]
-	runout<-biomvRhsmmRun(matrix(values(xgr)[,sample]), sample, xgr, soj, emis.type='norm')
+	runout<-hsmmRun(matrix(values(xgr)[,sample]), sample, xgr, soj, emis.type='norm')
 	biomvRGviz(exprgr=xgr, seggr=runout$res, tofile=FALSE) 
 	
 }

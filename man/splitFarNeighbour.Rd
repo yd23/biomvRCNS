@@ -7,7 +7,7 @@
 	Split segments if long gaps exist between feature position
 }
 \usage{
-splitFarNeighbour(intStart = NULL, intEnd = NULL, xpos = NULL, xrange = NULL, maxgap = Inf, minrun = 1)
+splitFarNeighbour(intStart = NULL, intEnd = NULL, xPos = NULL, xRange = NULL, maxgap = Inf, minrun = 1)
 }
 
 \arguments{
@@ -17,17 +17,17 @@ splitFarNeighbour(intStart = NULL, intEnd = NULL, xpos = NULL, xrange = NULL, ma
   \item{intEnd}{
 	indices of end for each segment 
 }
-  \item{xpos}{
-	position vecter, the distance of neighbouring features will be counted as point to point
+  \item{xPos}{
+	position vector, the distance of neighbouring features will be counted as point to point
 }
-  \item{xrange}{
+  \item{xRange}{
 	IRanges / GRanges object for the positions, the the distance of neighbouring features will be counted as end to start.
 }
   \item{maxgap}{
 	maximum distance between neighbouring features
 }
   \item{minrun}{
-	when spliting, the minimum length of the features spanning, which half will be ignored if shorter.
+	when splitting, the minimum length of the features spanning, which half will be ignored if shorter.
 }
 }
 
@@ -37,9 +37,12 @@ splitFarNeighbour(intStart = NULL, intEnd = NULL, xpos = NULL, xrange = NULL, ma
 	\item{IE}{the end indices for new segments}
 }
 
+\author{
+Yang Du
+}
 
 \examples{
 	set.seed(123)
 	pos<-cumsum(rnbinom(20, size=10, prob=0.01))
-	splitFarNeighbour(intStart=c(1, 10), intEnd=c(6, 18), xpos=pos, maxgap=1000)
+	splitFarNeighbour(intStart=c(1, 10), intEnd=c(6, 18), xPos=pos, maxgap=1000)
 }
