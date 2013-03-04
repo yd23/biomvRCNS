@@ -119,6 +119,8 @@ biomvRmgmr<-function(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0
     	xRange<-x
     	mcols(xRange)<-NULL
     	x<-as.matrix(values(x))
+		if( any(sapply(unique(seqnames(xRange)), function(s) length(unique(strand(xRange[seqnames(xRange)==s]))))!=1))
+    		stop('For some sequence, there are data appear on both strands !')
     } else if(length(dim(x))==2){
 		xid<-colnames(x)
 		x<-as.matrix(x)
@@ -184,6 +186,7 @@ biomvRmgmr<-function(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0
 				if(length(Ilist$IS)>0){
 					tores<-GRanges(seqnames=as.character(seqs[s]), 
 								IRanges(start=rep(start(xRange)[r][Ilist$IS], sum(gi)), end=rep(end(xRange)[r][Ilist$IE], sum(gi))), 
+								strand=strand(xRange)[r][Ilist$IS],
 								SAMPLE=rep(xid[gi], each=length(Ilist$IS)), 
 								STATE=rep('HI', length(Ilist$IS)*sum(gi)), 
 								MEAN=sapply(which(gi), function(c) sapply(seq_along(Ilist$IS), function(t) mean(x[Ilist$IS[t]:Ilist$IE[t],c], na.rm=na.rm)))
@@ -196,6 +199,7 @@ biomvRmgmr<-function(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0
 				if(length(Ilist$IS)>0){
 					tores<-GRanges(seqnames=as.character(seqs[s]), 
 						IRanges(start=start(xRange)[r][Ilist$IS], end=end(xRange)[r][Ilist$IE]), 
+						strand=strand(xRange)[r][Ilist$IS],
 						SAMPLE=rep(xid[c], length(Ilist$IS)), 
 						STATE=rep(ifelse(high, 'HIGH', 'LOW'), length(Ilist$IS)), 
 						MEAN=as.numeric(sapply(seq_along(Ilist$IS),  function(t) mean(x[Ilist$IS[t]:Ilist$IE[t],c], na.rm=na.rm)))
@@ -397,14 +401,14 @@ gammaFit<-function(x, wt=NULL){
 	if(length(x) != length(wt)) stop("length of x and wt differ!")
 	
 	tmp <- cov.wt(data.frame(x),wt=wt)
-    shape0 <- (tmp$center/sqrt(tmp$cov))^2
-    scale<-as.numeric(tmp$center)
-    shape<-optimize(function(shape) sum(dgamma(x,shape=shape, scale=scale,  log=TRUE)*wt, na.rm=TRUE), c(.Machine$double.eps, 1.5*shape0) , maximum = TRUE)[[1]]
-	return(c(shape=shape, scale=scale))
+    shape <- (tmp$center/sqrt(tmp$cov))^2
+    scale<-as.numeric(tmp$center)/shape
+	par<-optim(c(shape,scale),function(par) sum(dgamma(x,shape=par[1],scale=par[2], log=TRUE)*wt, na.rm=TRUE)  ,lower=.Machine$double.eps, method='L-BFGS-B', control=list(fnscale=-1,maxit=1000))$par
+	return(c(shape=par[1], scale=par[2]))
 }
 
 poisFit <- function(x, wt=NULL, maxshift=1) {  	
-#	if(maxshift>min(x)) stop("maxshift can't be greater than the minimum of x !")
+	if(maxshift>min(x)) stop("maxshift can't be greater than the minimum of x !")
 	if(is.null(wt)) wt <- rep(1/length(x),length(x))
 	if(length(x) != length(wt)) stop("length of x and wt differ!")
 	
