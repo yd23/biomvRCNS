@@ -24,7 +24,7 @@ hsmmRun(x, xid = "sampleid", xRange, soj, emis.type = "norm", q.alpha = 0.05, r.
 	a list object containing the relevant sojourn distribution parameters
 }
   \item{emis.type}{
-	type of the emission distribution, only the following types are supported: 'norm', 'mvnorm', 'pois'
+	type of the emission distribution, only the following types are supported: 'norm', 'mvnorm', 'pois', 'nbinom'
 }
   \item{q.alpha}{
 	a quantile factor controlling the estimated prior for the mean of the emission of each states, \code{seq(from=q.alpha, to=1-q.alpha, length.out=J)}
@@ -86,9 +86,9 @@ Yang Du
 	# a uniform inital sojourn, not utilizing positional information, just the index
 	soj<-list(J=J, maxk=maxk, type='nbinom', d=cbind(dunif(1:maxk, 1, maxk), dunif(1:maxk, 1, maxk)))
 	soj$D <- sapply(1:J, function(j) rev(cumsum(rev(soj$d[1:maxk,j]))))
-	# run 1 sample only, Coriell.05296
-	sample<-colnames(coriell)[4]
-	runout<-hsmmRun(matrix(values(xgr)[,sample]), sample, xgr, soj, emis.type='norm')
+	# run 1 sample only, Coriell.13330
+	sample<-colnames(coriell)[5]
+	runout<-hsmmRun(matrix(values(xgr)[,sample]), sample, xgr, soj, emis.type='norm', cMethod='Viterbi')
 }
 
 \keyword{ hsmm }

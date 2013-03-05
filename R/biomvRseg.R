@@ -14,6 +14,8 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
     	xRange<-x
     	mcols(xRange)<-NULL
     	x<-as.matrix(values(x))
+    	if( any(sapply(unique(seqnames(xRange)), function(s) length(unique(strand(xRange[seqnames(xRange)==s]))))!=1))
+    		stop('For some sequence, there are data appear on both strands !')
     } else if(length(dim(x))==2){
 		xid<-colnames(x)
 		x<-as.matrix(x)
@@ -179,6 +181,7 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xRange=ranges(xRange), maxgap=maxgap)
 					tores<-GRanges(seqnames=as.character(seqs[s]), 
 						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)), 
+						strand=strand(xRange)[Ilist$IS], 
 						SAMPLE=rep(xid[c], each=length(Ilist$IS)), 
 						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(t) apply(as.matrix(x[Ilist$IS[t]:Ilist$IE[t],c]), 2, mean, na.rm=na.rm)))
 					)
@@ -216,7 +219,8 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 					
 					Ilist<-splitFarNeighbour(intStart=j, intEnd=i, xRange=ranges(xRange), maxgap=maxgap)
 					tores<-GRanges(seqnames=as.character(seqs[s]), 
-						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)), 
+						IRanges(start=rep(start(xRange)[Ilist$IS], 1), end=rep(end(xRange)[Ilist$IE], 1)),
+						strand=strand(xRange)[Ilist$IS], 
 						SAMPLE=rep(xid[c], each=length(Ilist$IS)), 
 						MEAN=as.numeric(sapply(1:length(Ilist$IS),  function(t) apply(as.matrix(x[Ilist$IS[t]:Ilist$IE[t],c]), 2, mean, na.rm=na.rm)))
 					)

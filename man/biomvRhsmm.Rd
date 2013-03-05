@@ -33,7 +33,7 @@ biomvRhsmm(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start'
 	character value to indicate whether the 'start', 'end' or 'mid' point position should be used to estimate the sojourn distribution
 }
   \item{emis.type}{
-	type of the emission distribution, only the following types are supported: 'norm', 'mvnorm', 'pois'
+	type of the emission distribution, only the following types are supported: 'norm', 'mvnorm', 'pois', 'nbinom'
 }
   \item{xAnno}{
 	a optional \code{TranscriptDb} / \code{GRanges} / \code{GRangesList} object used in \code{\link{sojournAnno}} to infer parameters for the sojourn distribution 
@@ -103,7 +103,7 @@ Yang Du
 	xgr<-GRanges(seqnames=paste('chr', coriell[,2], sep=''), IRanges(start=coriell[,3], width=1, names=coriell[,1]))
 	values(xgr)<-DataFrame(coriell[,4:5], row.names=NULL)
 	xgr<-xgr[order(xgr)]
-	reshsmm<-biomvRhsmm(x=xgr, maxbp=1E4, J=3, soj.type='gamma', emis.type='norm', grp=c(1,2))
+	reshsmm<-biomvRhsmm(x=xgr, maxbp=4E4, J=3, soj.type='gamma', emis.type='norm', cMethod='Viterbi', grp=c(1,2))
 }
 
 \keyword{ hsmm }

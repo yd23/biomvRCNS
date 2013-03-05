@@ -17,6 +17,8 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
     	xRange<-x
     	mcols(xRange)<-NULL
     	x<-as.matrix(values(x))
+    	if( any(sapply(unique(seqnames(xRange)), function(s) length(unique(strand(xRange[seqnames(xRange)==s]))))!=1))
+    		stop('For some sequence, there are data appear on both strands !')
     } else if(length(dim(x))==2){
 		xid<-colnames(x)
 		x<-as.matrix(x)
@@ -31,6 +33,12 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		colnames(x)<-xid
 	}
 	
+	if (is.null(cMethod) || !(cMethod %in% c('BandF', 'Viterbi'))) 
+		stop("'cMethod' must be specified, must be either 'BandF' or 'Viterbi'!")
+
+	if (is.null(emis.type) || !(emis.type %in% c('norm', 'mvnorm', 'pois', 'nbinom'))) 
+		stop("'emis.type' must be specified, must be one of 'norm', 'mvnorm', 'pois', 'nbinom'!")
+
 	## some checking on xpos and xrange, xrange exist then xpos drived from xrange,
 	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
 		if(usePos=='start'){
@@ -189,6 +197,9 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
 		emis$var <- estEmisVar(x, J, r.var=r.var)
 	} else if (emis$type == 'pois'){
 		emis$lambda  <- estEmisMu(x, J, q.alpha=q.alpha)
+	} else if (emis$type == 'nbinom'){
+		emis$mu <- estEmisMu(x, J, q.alpha=q.alpha)
+		emis$size <- rep(0.5, J)
 	}
 	if(cMethod=='BandF'){
 		#estimation of most likely state sequence
@@ -209,7 +220,11 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
 			init[init<0]<-0
 			trans <- matrix(B$ahat,ncol=J)
 			trans[trans<0] <- 0
-	
+			
+			#check B$L
+			if(all(is.nan(B$L))) {
+			  stop("Sojourn distribution doesnot work well, NaN in B$L ")
+			}
 			#update emision according to the new estimated distribution paramenters using B$L
 			emis<-initEmis(emis=emis, x=x, B=B)
 			# update sojourn dD, using B$eta
@@ -235,12 +250,13 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
 	}
 	yhat<-as.character(yhat)
 	# setup this new res gr
-	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=xRange, maxgap=Inf, state=j)))
+	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=xRange, maxgap=maxgap, state=j)))
 	names(Ilist)<-unique(yhat)
 	res<- do.call('c', 
 					lapply(unique(yhat), function(j)
 						GRanges(seqnames=as.character(seqnames(xRange)[1]), 
 							IRanges(start=rep(start(xRange)[Ilist[[j]][,'IS']], length(xid)), end=rep(end(xRange)[Ilist[[j]][,'IE']], length(xid))), 
+							strand=rep(strand(xRange)[Ilist[[j]][,'IS']], length(xid)), 
 							SAMPLE=rep(xid, each=nrow(Ilist[[j]])), 
 							STATE=rep(as.character(j), nrow(Ilist[[j]])*length(xid)), 
 							MEAN=as.numeric(sapply(xid, function(s) apply(Ilist[[j]], 1, function(r) apply(as.matrix(x[r[1]:r[2],s]), 2, mean, na.rm=na.rm))))
@@ -582,6 +598,9 @@ initEmis<-function(emis, x, B=NULL){
 		} else if (emis$type == 'norm'){
 			J<-length(emis$mu)
 			emis$p <- sapply(1:J, function(j) dnorm(x,mean=emis$mu[j], sd=sqrt(emis$var[j]))) # here is sd
+		} else if(emis$type == 'nbinom'){
+			J<-length(emis$mu)
+			emis$p <- sapply(1:J, function(j) dnbinom(x,size=emis$size[j], mu=emis$mu[j]))
 		}
 	} else {
 		# then this is for the re-restimation of emis param
@@ -599,6 +618,11 @@ initEmis<-function(emis, x, B=NULL){
 			tmp <- apply(matrix(B$L,ncol=J), 2, function(cv) unlist(cov.wt(matrix(x[isa]), cv[isa])[c('cov', 'center')])) # x is already a matrix 
 			emis$mu <- tmp['center',]
 			emis$var <- tmp['cov', ]		
+		} else if(emis$type == 'nbinom'){
+			isa <- !is.na(x)
+			tmp <- apply(matrix(B$L,ncol=J), 2, function(cv) nbinomFit((x[isa]), cv[isa]))
+   			emis$mu <- tmp['mu',]
+			emis$size <- tmp['size', ]
 		}
 	}
 	
@@ -620,5 +644,4 @@ splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=
 	}
 	return(list(IS=intStart, IE=intEnd))
 }
-
 
