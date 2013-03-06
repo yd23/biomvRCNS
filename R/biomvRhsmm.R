@@ -74,7 +74,6 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		#now, if there is xAnno, then J, maxbp could be infered, and if xPos exists, then maxk could also be infered.
 		if(is.null(maxbp)){
 			# estimating a reasonable number for maxbp
-#			fixme, this is related to the soj type, now only have gamma avaliable
 			maxbp<- switch(soj.type,
 				nbinom = ceiling(median(soj$mu)),
 				pois = ceiling(median(soj$lambda)),
@@ -199,11 +198,11 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
 		emis$lambda  <- estEmisMu(x, J, q.alpha=q.alpha)
 	} else if (emis$type == 'nbinom'){
 		emis$mu <- estEmisMu(x, J, q.alpha=q.alpha)
-		emis$size <- rep(0.5, J)
+		emis$size <- rep(0.5, J) # arbitrary prior
 	}
+	# switch est.method 
+	#estimation of most likely state sequence
 	if(cMethod=='BandF'){
-		#estimation of most likely state sequence
-		# switch est.method   viterbi , .C /  smooth
 		#define likelihood
 		ll <- rep(NA,maxit)
 		# start MM iteration
@@ -283,53 +282,12 @@ unifMJ<-function(M,J, ints=NULL){
 		stop('All supplied intervals should be in the range of [1, M]')
 	} else {
 		# ints, a dataframe marks the starts and ends for each interval
-		# fixme, seems need some more thinking, currently, for all states the unif prior has the same interval setup.
 		ret<-do.call(cbind, lapply(1:J, function(j) do.call(c, lapply(1:nrow(ints), function(i) dunif(1:M, ints[i,1], ints[i,2])))))		
 	}
 	ret
 }
 
 
-
-##################################################
-# simulate annotation for simluated dataset, into 3 group, monotonicly accending x value
-##################################################
-simuAnno<-function(obj){
-	if(class(obj) != 'biomvRseg') stop("invalid class for input object, must be 'biomvRseg' !")
-	nr<-nrow(obj@x)
-	# with multiple groups, then the annotation simulation should be done for each group
-	# thus will generate ngroup 
-	gtag<-unique(obj@group)
-	ng<-length(gtag)
-	if(ng>1){
-		# more than one group
-		xAnno<-GRangesList()
-		ptype<-matrix(0, nrow=nr, ncol=ng)
-		colnames(ptype)<-gtag
-		for(g in 1:ng){
-			s<-match(gtag[g], obj@group)
-			segType<-rep('B', length(obj@segMean[[s]]))
-			segType[which(obj@segMean[[s]]<quantile(obj@segMean[[s]], 0.25))]<-'A'
-			segType[which(obj@segMean[[s]]>quantile(obj@segMean[[s]], 0.7))]<-'C'
-			pr<-c(1, obj@segStart[[s]], nr+1)
-			ptype[,g]<-unlist(sapply(2:length(pr), function(i) rep(segType[i-1], pr[i]-pr[i-1])))
-			prle<-Rle(ptype[,g])
-			xAnno<-c(xAnno, GRangesList(GRanges(seqnames = Rle(c("chr99"), ), ranges = IRanges(start=c(1, (cumsum(runLength(prle))+1)[1:(length(runLength(prle))-1)]), end=cumsum(runLength(prle))) , type= runValue(prle))))
-		}	
-	} else {
-		#single group
-		segType<-rep('B', length(obj@segMean[[1]]))
-		segType[which(obj@segMean[[1]]<quantile(obj@segMean[[1]], 0.25))]<-'A'
-		segType[which(obj@segMean[[1]]>quantile(obj@segMean[[1]], 0.7))]<-'C'
-		pr<-c(1, obj@segStart[[1]], nr+1)
-		ptype<-unlist(sapply(2:length(pr), function(i) rep(segType[i-1], pr[i]-pr[i-1])))
-		prle<-Rle(ptype)
-		xAnno<-GRanges(seqnames = Rle(c("chr99"), ), ranges = IRanges(start=c(1, (cumsum(runLength(prle))+1)[1:(length(runLength(prle))-1)]), end=cumsum(runLength(prle))) , type= runValue(Rle(ptype)))
-	}
-	# when corecing a multicolumn data.fram / matrix with chars to the values() of granges, careful
-	xMeta<-GRanges(seqnames = Rle(c("chr99"), nr), ranges = IRanges(start=1:nr, width=1) , type=data.frame(X1=ptype, stringsAsFactors=F))
-	return(list(xMeta=xMeta, xAnno=xAnno))
-}
 
 
 ##################################################
@@ -341,15 +299,12 @@ sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){
 	# there is also the possiblity of proposing an emperical number for the states.
 	# must ensure there are at least 2 for each state ? todo
 		
-	if(class(xAnno) == 'TranscriptDb') {
-		
-		   
+	if(class(xAnno) == 'TranscriptDb') {   
 	   if(length(find.package('GenomicFeatures', quiet=T))==0) {
 			stop("'GenomicFeatures' is not found !!!")
 		} else {
 			require(GenomicFeatures)
 		}
-		
 		J<-3
 		fttypes<-c('intergenic', 'intron', 'exon')
 		#3 feature type, exon, intron, intergenic
@@ -438,7 +393,7 @@ initDposV<-function(xpos, maxbp){
 	#dposV[1]<-.Machine$double.eps # this will not ensure a 1 for the first position after the dgamma call.
 	# sub > maxbp and NA
 	dposV[which(dposV>maxbp)]<-NA
-	#dposV[is.na(dposV)]<-.Machine$double.xmax # for those positions exceed maxbp, this works fine #fixme, now there is another problem in b/f algo, the xmax will make the reestimation of soj$d difficult...
+	#dposV[is.na(dposV)]<-.Machine$double.xmax # for those positions exceed maxbp, this works fine
 	return(list(dposV=dposV, maxk=maxk))
 }
 

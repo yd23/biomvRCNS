@@ -12,13 +12,13 @@ hsmmRun(x, xid = "sampleid", xRange, soj, emis.type = "norm", q.alpha = 0.05, r.
 
 \arguments{
   \item{x}{
-	input data matrix or vector, ordered wrt. postion
+	input data matrix or vector, ordered wrt. position
 }
   \item{xid}{
 	name of the sample
 }
   \item{xRange}{
-	a \code{IRanges}/\code{GRanges} obejct, same length as \code{x} rows
+	a \code{IRanges}/\code{GRanges} object, same length as \code{x} rows
 }
   \item{soj}{
 	a list object containing the relevant sojourn distribution parameters

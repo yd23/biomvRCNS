@@ -25,7 +25,7 @@ biomvRseg(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NULL, usePos=
 }
 
  \item{xPos}{
-	a vecter of positons for each \code{x} row
+	a vector of positions for each \code{x} row
 }
   \item{xRange}{
 	a \code{IRanges}/\code{GRanges} object, same length as \code{x} rows
@@ -64,7 +64,7 @@ biomvRseg(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NULL, usePos=
 	vector of group assignment for each sample, with a length the same as columns in the data matrix, samples within each group would be processed simultaneously if a multivariate emission distribution is available
 }
   \item{clusterm}{
-	clusting method for prior grouping, possible values are 'ward','single','complete','average','mcquitty','median','centroid'
+	clustering method for prior grouping, possible values are 'ward','single','complete','average','mcquitty','median','centroid'
 }
   \item{na.rm}{
 	\code{TRUE} if \code{NA} value should be ignored 

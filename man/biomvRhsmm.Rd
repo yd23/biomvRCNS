@@ -24,7 +24,7 @@ biomvRhsmm(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start'
 	number of states
 }
   \item{xPos}{
-	a vecter of positons for each \code{x} row
+	a vector of positions for each \code{x} row
 }
   \item{xRange}{
 	a \code{IRanges}/\code{GRanges} object, same length as \code{x} rows
@@ -64,7 +64,7 @@ biomvRhsmm(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start'
 	vector of group assignment for each sample, with a length the same as columns in the data matrix, samples within each group would be processed simultaneously if a multivariate emission distribution is available
 }
   \item{clusterm}{
-	clusting method for prior grouping, possible values are 'ward','single','complete','average','mcquitty','median','centroid'
+	clustering method for prior grouping, possible values are 'ward','single','complete','average','mcquitty','median','centroid'
 }
   \item{na.rm}{
 	\code{TRUE} if \code{NA} value should be ignored 
@@ -72,7 +72,7 @@ biomvRhsmm(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start'
 }
 \details{
 	This is the batch function of building Hidden Semi Markov Model (HSMM) to estimating the most likely state sequences for multiple input data series.
-	The function will sequentially process each region identified by the distinctive \code{seqnames} in the \code{xRange} object if avaliable, or assuming all data from the same region.
+	The function will sequentially process each region identified by the distinctive \code{seqnames} in the \code{xRange} object if available, or assuming all data from the same region.
 	A second layer of stratification is introduced by the argument \code{grp}, which could be used to reflect experimental design. 
 	The assumption is that profiles from the same group could be considered homogeneous, thus processed together if \code{emis.type} is compatible (currently only with 'mvnorm').
 	Argument for the sojourn density will be initialized as flat prior or estimated from other data before calling the work horse function \code{hsmmRun}.

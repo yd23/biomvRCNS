@@ -37,7 +37,7 @@ sojournAnno(xAnno, soj.type = "gamma", pbdist = NULL)
 }
 
 \examples{
-	library(TxDb.Hsapiens.UCSC.hg19.knownGene)
-	txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
-	soj<-sojournAnno(txdb, soj.type='pois')
+	data(encodeTP53)
+	encodeTP53$gmgr # a GRanges object
+	soj<-sojournAnno(encodeTP53$gmgr, soj.type='gamma')
 }

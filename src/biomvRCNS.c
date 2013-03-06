@@ -293,6 +293,7 @@ void viterbi(double *a, double *pi, double *b, double *d, double *D, int *maxk_r
 /*	ops  = (int *)malloc(sizeof(int)*T*J);*/
 
 	for(t=0;t<T;t++) {
+		R_CheckUserInterrupt();
 		for(j=0;j<J;j++) {								
 			obs=1;
 			if(t<T-1) {					

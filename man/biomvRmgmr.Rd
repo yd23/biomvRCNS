@@ -15,7 +15,7 @@ biomvRmgmr(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0.9, high=T
 	input data matrix, or a \code{GRanges} object with input stored in the meta \code{DataFrame}, assume ordered.
 }
  \item{xPos}{
-	a vecter of positons for each \code{x} row
+	a vector of positions for each \code{x} row
 }
   \item{xRange}{
 	a \code{IRanges}/\code{GRanges} obejct, same length as \code{x} rows
@@ -48,7 +48,7 @@ biomvRmgmr(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0.9, high=T
 	vector of group assignment for each sample, with a length the same as columns in the data matrix, samples within each group would be processed simutaneously if a multivariate emission distribution is avaliable
 }
   \item{clusterm}{
-	clusting method for prior grouping, possible values are 'ward','single','complete','average','mcquitty','median','centroid'
+	clustering method for prior grouping, possible values are 'ward','single','complete','average','mcquitty','median','centroid'
 }
   \item{na.rm}{
 	\code{TRUE} if \code{NA} value should be ignored 
@@ -60,7 +60,7 @@ biomvRmgmr(x, xPos=NULL, xRange=NULL, usePos='start', cutoff=NULL, q=0.9, high=T
 \value{
 	A \code{\link{biomvRCNS}} object:
     \item{\code{x}:}{Object of class \code{"GRanges"}, with range information either from real positional data or just indices, with input data matrix stored in the meta columns.} 
-    \item{\code{res}:}{Object of class \code{"GRanges"} , each range represent one continous segment identified, with sample name slot 'SAMPLE' and segment mean slot 'MEAN' stored in the meta columns  }
+    \item{\code{res}:}{Object of class \code{"GRanges"} , each range represent one continuous segment identified, with sample name slot 'SAMPLE' and segment mean slot 'MEAN' stored in the meta columns  }
     \item{\code{param}:}{Object of class \code{"list"}, list of all parameters used in the model run. }
 }
 

@@ -3,7 +3,7 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 	
 	# input to the main function is a matrix object, x, features on the same strand and same chr
 	# optional grouping factor, length of which should be the same as the column of x
-	# input checking and preparion
+	# input checking and preparation
 	if (is.null(family) || (family != 'norm' && family != 'pois' && family != 'nbinom')) 
     	stop("'family' must be specified, currently only 'norm' ,'pois' and 'nbinom' are supported !")
 	
@@ -56,7 +56,7 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 		 stop(sprintf("'maxseg' must be a single integer between 2 and the number of rows of 'x': %d.", nr))
 	maxseg<-as.integer(maxseg) # this is the number for initial candidate region
 	if (is.null(maxbp) && (is.null(maxk) || !is.numeric(maxk) || (length(maxk) != 1) || (maxk <= 1) ||  (maxk > nr))) 
-	 	 stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d, if maxbp is not avaliable.", nr))
+	 	 stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d, if maxbp is not available.", nr))
 	maxk<-as.integer(maxk) # this is the maximal windows size for the initial segmentation
 	# fixme, this check may not be necessary, since nr might be a sum of multiple seq
 #	if(maxk*maxseg<nr) 
@@ -93,8 +93,6 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 	tmaxk<-maxk
 	# we have more than one seq to batch
 	
-####	fixme, xRange doesnot sound right. need a look at. !!!!!!!!
-	
 	for(s in seq_along(seqs)){
 		cat(sprintf("Processing sequence %s\n", seqs[s]))
 		r<-which(as.character(seqnames(xRange)) == seqs[s])
@@ -111,7 +109,7 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 		}	
 		
 		for(g in unique(grp)){
-			cat(sprintf("Step 1 building segmetation model for group %s\n", g))
+			cat(sprintf("Step 1 building segmentation model for group %s\n", g))
 			gi<-grp==g
 			d<-sum(gi)
 			if(family=='nbinom'){
@@ -163,7 +161,7 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 				mBIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x] +mbic2ndt[x]/2- log(length(r)*d)/2 + nP[x]*log(length(r)*d))),
 				HQIC = which.min(sapply(seq_len(maxseg), function(x) -2*logL[x]+2*nP[x]*log(log(length(r)*d)))),
 				stop('Invalid value argument for penalty'))	
-			cat(sprintf("Step 1 building segmetation model for group %s complete\n", g))
+			cat(sprintf("Step 1 building segmentation model for group %s complete\n", g))
 		
 			#rN could be supplied by the user, thus only keeping the initial segment candidate
 			for(c in which(gi)){
@@ -229,7 +227,7 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 					cat(sprintf("Step 2 merging complete for column %s from group %s\n", c, g))
 				} # end 2nd step if
 			} # end c for
-			cat(sprintf("Building segmetation model for group %s complete\n", g))
+			cat(sprintf("Building segmentation model for group %s complete\n", g))
 		} # end for g
 		cat(sprintf("Processing sequence %s complete\n", seqs[s]))
 	} # end for s
@@ -260,8 +258,8 @@ biomvRseg<-function(x, maxk=NULL, maxbp=NULL, maxseg=NULL, xPos=NULL, xRange=NUL
 
 regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum=TRUE, useMC=FALSE, comVar=TRUE){
 	# the same cost function for both initial DP segmentation and 2nd DP merging
-	# segs, a vector of the starting index of each candiate region, except for the first position 1
-	# check input x, convert to vecter if necessary
+	# segs, a vector of the starting index of each candidate region, except for the first position 1
+	# check input x, convert to vector if necessary
 	if (is.null(family) || (family != 'norm' && family != 'pois' && family != 'nbinom')) 
         stop("'family' must be specified, currently only 'norm' ,'pois' and 'nbinom' are supported !")
   
@@ -308,7 +306,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
     	N<-length(segs)+1
      	if (!is.null(maxk)){
      		# both specified, offer a warning
-     		warning(sprintf("Both 'maxk' and 'segs' are specified, maxk would be overrided with lenth(segs)+1=%d", N))
+     		warning(sprintf("Both 'maxk' and 'segs' are specified, maxk would be overriden with lenth(segs)+1=%d", N))
      	}
      	maxk<-N 
      } else {
@@ -428,7 +426,7 @@ regionSegCost<-function(x, maxk=NULL, segs=NULL, family=NULL, alpha=NULL, useSum
 
 
 NBlogL1stTerm<-function(x, alpha){
-	# here alpha is a sinlge value, estimated from the same segment of the x matrix
+	# here alpha is a single value, estimated from the same segment of the x matrix
 	# log first and sum latter
 	if(alpha==0){
 		0
@@ -440,8 +438,8 @@ NBlogL1stTerm<-function(x, alpha){
 
 regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE, tol=1e-06){
 	# generate alpha matrix for NB model, in both steps of segmentation cost prep.
-	# segs, a vector of the starting index of each candiate region, except for the first position 1
-	# check input x, convert to vecter if necessary
+	# segs, a vector of the starting index of each candidate region, except for the first position 1
+	# check input x, convert to vector if necessary
 	if (!is.numeric(x) || !(is.vector(x) || is.matrix(x))) 
         stop("'x' must be a numeric vector or matrix.")
     if (is.vector(x)) {
@@ -454,11 +452,11 @@ regionSegAlphaNB<-function(x, maxk=NULL, segs=NULL, useMC=FALSE, tol=1e-06){
     }
     n<-length(r)
        
-   if(useMC & length(find.package('multicore', quiet=T))==0) {
-		warning("'multicore' is not found, use normal 'apply' function!!!")
+   if(useMC & length(find.package('parallel', quiet=T))==0) {
+		warning("'parallel' is not found, use normal 'apply' function!!!")
 		useMC<-FALSE
 	} else if (useMC){
-		require(multicore)
+		require(parallel)
 	}
         
     ## check input parameter maxk and segs

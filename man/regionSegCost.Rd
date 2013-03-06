@@ -21,7 +21,7 @@ regionSegCost(x, maxk = NULL, segs = NULL, family = NULL, alpha = NULL, useSum =
 	Starting indices (excluding 1) for the candidate segments, for the second stage model, \code{maxk} will be overridden with \code{length(segs)+1}.
 }
   \item{family}{
-	which expontial family the data belongs to, possible values are  'norm', 'pois' and 'nbinom'
+	which exponential family the data belongs to, possible values are  'norm', 'pois' and 'nbinom'
 }
   \item{alpha}{
 	alpha matrix for negative binomial cost calculation, estimated from \code{\link{regionSegAlphaNB}}

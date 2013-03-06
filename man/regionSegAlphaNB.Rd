@@ -46,9 +46,9 @@ regionSegAlphaNB(x, maxk = NULL, segs = NULL, useMC = FALSE, tol=1e-06)
 
 \examples{
 	x<-matrix(rnbinom(120, size=0.05, mu=20), ncol=3)
-	Aa<-regionSegAlphaNB(x, maxk=20, useMC=TRUE)
+	Aa<-regionSegAlphaNB(x, maxk=20)
 	dim(Aa) # [1] 20 40
-	Ab<-regionSegAlphaNB(x, segs=as.integer(c(3, 6, 12, 30)), useMC=TRUE)
+	Ab<-regionSegAlphaNB(x, segs=as.integer(c(3, 6, 12, 30)))
 	dim(Ab) # [1] 5 5
 }
 
