@@ -1,3 +1,39 @@
+CHANGES IN VERSION 1.1.9
+
+BUG FIXES
+
+    o NA bug when model fails
+    o using the length of the segment if shorter than maxk
+
+CHANGES IN VERSION 1.1.8
+-------------------------
+
+NEW FEATURES
+
+    o add error catching in biomvRhsmm
+    o updates in package vignette
+    
+BUG FIXES
+
+    o fine tuning of memory usage for large count data structure
+    o minor bug fixes
+
+CHANGES IN VERSION 1.1.7
+-------------------------
+
+NEW FEATURES
+
+    o add support of Rle like sparse data in mcols of large count data structure.
+    o add mclapply for parallel processing of different seqnames in biomvRhsmm
+
+
+CHANGES IN VERSION 1.1.6
+-------------------------
+    
+BUG FIXES
+
+    o fix nbinom emis estimateSegCommonDisp -> nbinomCLLDD
+
 CHANGES IN VERSION 1.1.5
 -------------------------
 

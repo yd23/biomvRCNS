@@ -1,11 +1,12 @@
 ##################################################
 # re-implement HSMM, one more slot to handle distance array
 ##################################################
-biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', emis.type='norm', xAnno=NULL, soj.type='gamma', q.alpha=0.05, r.var=0.75, cMethod='F-B', maxit=1, maxgap=Inf, tol=1e-06, grp=NULL, cluster.m=NULL, avg.m='median', prior.m = 'cluster', trim=0, na.rm=TRUE){
+biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, usePos='start', emis.type='norm', com.emis=FALSE, xAnno=NULL, soj.type='gamma', q.alpha=0.05, r.var=0.75, useMC=TRUE, cMethod='F-B', maxit=1, maxgap=Inf, tol=1e-06, grp=NULL, cluster.m=NULL, avg.m='median', prior.m = 'cluster', trim=0, na.rm=TRUE){
 	## input checking
 	# lock.transition / lock.d, lock transition and sojourn #fixme
 	# est.method=c('viterbi', 'smooth')
 	
+	message('Checking input ...')
 	if (!is.numeric(x) &&  !is.matrix(x) && class(x)!='GRanges') 
         stop("'x' must be a numeric vector or matrix or a GRanges object.")
     if(class(x)=='GRanges') {
@@ -13,16 +14,27 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
     	xRange<-x
     	mcols(xRange)<-NULL
     	x<-as.matrix(values(x))
-    	if( any(sapply(unique(seqnames(xRange)), function(s) length(unique(strand(xRange[seqnames(xRange)==s]))))!=1))
+    	if( any(sapply(as.character(unique(seqnames(xRange))), function(s) length(unique(strand(xRange)[seqnames(xRange)==s])))!=1) )
     		stop('For some sequence, there are data appear on both strands !')
     } else if(length(dim(x))==2){
 		xid<-colnames(x)
 		x<-as.matrix(x)
 	} else {
-		cat('No dim attributes, coercing x to a matrix with 1 column.\n')
+		message('No dim attributes, coercing x to a matrix with 1 column.')
 		x <- matrix(as.numeric(x), ncol=1)
+		xid<-NULL
 	}
-	nr<-nrow(x) 
+	
+	# check the case when Rle in x mcols
+	if(!is.null(xRange) & length(xRange) != nrow(x)){
+		nr<-length(xRange)
+		spRle<-TRUE
+		if(nr > .Machine$integer.max) stop("Length of input is longer than .Machine$integer.max")
+	} else {
+		nr<-nrow(x)
+		spRle<-FALSE
+	}
+
 	nc<-ncol(x)
 	if(is.null(xid)){
 		xid<-paste('S', seq_len(nc), sep='')
@@ -37,8 +49,17 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 
 	if (is.null(emis.type) || !(emis.type %in% c('norm', 'mvnorm', 'pois', 'nbinom', 'mvt', 't'))) 
 		stop("'emis.type' must be specified, must be one of 'norm', 'mvnorm', 'pois', 'nbinom', 'mvt', 't'!")
+		
+	if (prior.m == 'cluster'){
+		if(length(find.package('cluster', quiet=T))==0) {
+			warning("'cluster' is not found, fall back to quantile method!!!")
+			prior.m <- 'quantile'
+		} else {
+			require(cluster)
+		}
+	}
 
-	## some checking on xpos and xrange, xrange exist then xpos derived from xrange,
+	## some checking on xPos and xRange, xRange exist then xPos derived from xRange,
 	if(!is.null(xRange) && (class(xRange)=='GRanges' || class(xRange)=='IRanges') && !is.null(usePos) && length(xRange)==nr && usePos %in% c('start', 'end', 'mid')){
 		if(usePos=='start'){
 			xPos<-start(xRange)
@@ -49,29 +70,29 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		}
 	} else {
 		# no valid xRange, set it to null
-		cat('no valid xRange and usePos found, check if you have specified xRange / usePos.\n')
+		message('no valid xRange and usePos found, check if you have specified xRange / usePos.')
 		xRange<- NULL
 	} 
 	if (is.null(xPos) || !is.numeric(xPos) || length(xPos)!=nr){
-		cat("No valid positional information found. Re-check if you have specified any xPos / xRange.\n")
+		message("No valid positional information found. Re-check if you have specified any xPos / xRange.")
 		xPos<-NULL
 	}
 	if (!is.null(maxbp) && (!is.numeric(maxbp) || (length(maxbp) != 1) || (maxbp <= 1) ||  ( !is.null(xPos) && maxbp > max(xPos,na.rm=na.rm)-min(xPos, na.rm=na.rm)))) 
-	 	 stop(sprintf("'maxbp' must be a single integer between 2 and the maximum length of the region if xPos is avaliable!"))	
+	 	 stop(sprintf("'maxbp' must be a single integer between 2 and the maximum length of the region if xPos is available!"))	
 	
 	# check grp setting, cluster if needed, otherwise treat as one group
 	if(!is.null(grp)) grp<-as.character(grp)
-	grp<-preClustGrp(x, grp=grp, cluster.m=cluster.m)
+	grp<-preClustGrp(x, grp=grp, cluster.m=cluster.m) #?todo there could be problem if spRle and need clustering
 	
 	# initial sojourn setup unify parameter input / density input,  using extra distance, non-integer value can give a dtype value
 	if(!is.null(xAnno) && !is.null(soj.type) && soj.type %in% c('gamma', 'pois', 'nbinom') && class(xAnno) %in% c('TranscriptDb', 'GRanges', 'GRangesList', 'list')){
-		#	this is only used when the xAnno object contains appropriate annotation infromation which could be used as prior for the sojourn dist in the new HSMM model
+		#	this is only used when the xAnno object contains appropriate annotation information which could be used as prior for the sojourn dist in the new HSMM model
 		# if xAnno is also present, then J will be estimated from xAnno, and pop a warning, ## this only make sense if difference exist in the distribution of sojourn of states.	
 		# a further list object allow direct custom input for initial sojourn dist parameters., e.g. list(lambda=c(10, 50, 1000))
 		soj<-sojournAnno(xAnno, soj.type=soj.type)
 		J<-soj$J
-		cat('Estimated state number from xAnno: J = ', J, '\n', sep='')	
-		#now, if there is xAnno, then J, maxbp could be infered, and if xPos exists, then maxk could also be infered.
+		message('Estimated state number from xAnno: J = ', J)	
+		#now, if there is xAnno, then J, maxbp could be inferred, and if xPos exists, then maxk could also be inferred.
 		if(is.null(maxbp)){
 			# estimating a reasonable number for maxbp
 			maxbp<- switch(soj.type,
@@ -83,14 +104,14 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		}
 #		soj<-append(soj, maxbp=maxbp) 
 	} else if(is.numeric(J) && J>1){
-		cat('xAnno is not present or not supported, try to use maxbp/maxk in the uniform prior for the sojourn distribution.\n') 
+		message('xAnno is not present or not supported, try to use maxbp/maxk in the uniform prior for the sojourn distribution.') 
 		# J is ok
 		if(is.null(xPos)){
 			# no position as well, in turn means no xRange nor multiple seq, 
 			# init if J and maxk are ok
 			if (!is.null(maxk) && is.numeric(maxk) && (length(maxk) == 1) && (maxk > 1) &&  (maxk < nr)) {
-				cat('maxbp and xPos are not present or not valid, using maxk for the sojourn distribution.\n')
-				soj<-list(d = unifMJ(maxk, J), type = soj.type, J=J, maxk=maxk)
+				message('maxbp and xPos are not present or not valid, using maxk for the sojourn distribution.')
+				soj<-list(type = soj.type, J=J, maxk=maxk)
 			} else {
 				stop(sprintf("'maxk' must be a single integer between 2 and the number of rows of 'x': %d.", nr))
 			}
@@ -100,9 +121,9 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		} else if (!is.null(maxk) && is.numeric(maxk) && (length(maxk) == 1) && (maxk > 1) &&  (maxk < nr)) {
 			#has pos, but no good maxbp
 				warning('Has positions but no maxbp, using maxk for the sojourn distribution !!!')
-				soj<-list(d = unifMJ(maxk, J), type = soj.type, J=J, maxk=maxk)
+				soj<-list(type = soj.type, J=J, maxk=maxk)
 		} else {
-			stop(sprintf("Both maxk and maxbp are not avaliable!"))
+			stop(sprintf("Both maxk and maxbp are not available!"))
 		}
 	} else {
 		# no good J
@@ -110,9 +131,8 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 	}
 	# so far, soj is a list object, depending on which case
 	# case1, soj param J, maxbp from xAnno
-	# case2, no pos, has input maxk and J and d, ready for initSojDd
-	# case3, has input pos and maxbp
-
+	# case2, no pos, has input maxk and J and d, ready for initSojDd # may reinitialize maxk later
+	# case3, has input xPos and maxbp
 
 	# check mv vs iterative
 	 if (emis.type=='mvnorm' || emis.type=='mvt' ){
@@ -132,70 +152,166 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 		}
 	}
 	# get seqnames status	
-	seqs<-unique(as.character(seqnames(xRange)))
-	
-	
-	## initialize the output vectors
-	state <- matrix(NA, nrow=nr, ncol=nc)
-	res<-GRanges()
-	seqlevels(res)<-seqlevels(xRange)
-	
-	### to return more
-	emis.par <- matrix(list(), length(seqs), nc)
-	rownames(emis.par)<-seqs
-	colnames(emis.par)<-xid
-	soj.par <- matrix(list(), length(seqs), nc)
-	rownames(soj.par)<-seqs
-	colnames(soj.par)<-xid
-	state.p <- matrix(NA, nrow=nr, ncol=nc)
-	
-	
-	# we have more than one seq to batch
-	for(s in seq_along(seqs)){
-		r<-as.character(seqnames(xRange)) == seqs[s]
-		# prep soj for the c loop, since there are multiple seq, which also means there must be xpos and maxbp
-		if(is.null(soj$d)){
-			# either has soj parameter, or has pos and maxbp for unif
-			ssoj<-append(soj, initDposV(xPos[r], maxbp))
-			if(is.null(ssoj$fttypes)){
-				# dont't have soj param
-				ssoj<-append(ssoj, list(d=unifMJ(ssoj$maxk*sum(r), J)))
+	seqs<-unique(as.character(seqnames(xRange))) # speed gain for large no. of contig
+
+	### pre calc emis if common prior for all seq, done outside of seqname loop
+	message("Estimating common emission prior ...")
+	if(com.emis){
+		if(iterative){
+			if(spRle){
+				emis<-lapply(seq_len(ncol(x)), function(c) estEmis(x[,c][[1]], J=J, emis.type=emis.type, prior.m=prior.m, q.alpha=q.alpha, r.var=r.var)) 
+			} else {
+				emis<-lapply(seq_len(ncol(x)), function(c) estEmis(x[,c], J=J, emis.type=emis.type, prior.m=prior.m, q.alpha=q.alpha, r.var=r.var)) 
 			}
 		} else {
-			# maxk and unif d, no maxbp or xAnno
-			ssoj<-soj
-		}	
-		ssoj <- initSojDd(ssoj)
-		
-		for(g in unique(grp)){
-			cat(sprintf("step 1 building HSMM for group %s\n", g))
-			gi<-grp==g
-			if(iterative){
-				for(c in which(gi)){
-					cat(sprintf("step 1 building HSMM for seq %s in column %s.\n", seqs[s], c))
-					runout<-hsmmRun(x[r,c], xid[c], xRange[r], ssoj, emis.type, q.alpha, r.var, cMethod, maxit, maxgap,  tol, avg.m=avg.m, prior.m=prior.m, trim=trim, na.rm=na.rm) 	
-					res<-c(res, runout$res)
-					state[r, c]<-runout$yhat
-					state.p[r, c]<- runout$yp
-					emis.par[s,c]<- list(runout$emispar)
-					soj.par[s,c]<- list(runout$sojpar)
+			if(spRle){
+				stop('Rle like structure is not currently supported for mvnorm / mvt!')
+			} else {
+				emis<-lapply(unique(grp), function(g) estEmis(x[,grp==g], J=J, emis.type=emis.type, prior.m=prior.m, q.alpha=q.alpha, r.var=r.var)) 
+			}
+			names(emis)<-unique(grp)
+		}
+	}
+
+	#make it parallel
+	if(useMC & length(find.package('parallel', quiet=T))==0) {
+		warning("'parallel' is not found, use normal 'lapply' function!!!")
+		useMC<-FALSE
+		mylapply<-lapply
+	} else if (useMC){
+		require(parallel)
+		mylapply<-mclapply
+	} else {
+		mylapply<-lapply
+	}
+	# we have more than one seq to batch
+	mcres<-mylapply(seq_along(seqs), function(s) {
+		r<-which(as.character(seqnames(xRange)) == seqs[s])
 			
+		if(length(r)<2){
+			warning('Region too short for seq ', s, ' skipped!')
+			if(iterative){
+				runout<- sapply(seq_len(nc), function(c) list(NA))
+			} else {
+				runout<- sapply(unique(grp), function(g) list(NA))
+			}
+		} else {
+			runout<-list()
+			# prep soj for the c loop, since there are multiple seq, which also means there must be xpos and maxbp
+			message(sprintf("Preparing sojourn prior for seq  '%s' ...", seqs[s]))				
+			if(is.null(soj$maxk)){
+				# either has soj parameter, or has pos and maxbp for unif
+				ssoj<-append(soj, initDposV(xPos[r], maxbp))
+				if(is.null(ssoj$fttypes)){
+					# dont't have soj param
+					ssoj<-append(ssoj, list(d=unifMJ(ssoj$maxk*length(r), J)))
 				}
 			} else {
-				runout<-hsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, emis.type, q.alpha, r.var, cMethod, maxit, maxgap, tol, avg.m=avg.m, prior.m=prior.m, trim=trim, na.rm=na.rm)	
-				res<-c(res, runout$res)
-				state[r, gi]<-runout$yhat
-				state.p[r, gi]<- runout$yp
-				emis.par[s,gi]<- list(runout$emispar)
-				soj.par[s,gi]<- list(runout$sojpar)
-			}
-		} # end for g
-	}	# end for s
+				# maxk and unif d, no maxbp or xAnno, using the min of input maxk and length of the seq
+				ssoj<-append(soj, list(d=unifMJ(min(soj$maxk,length(r)), J)))
+				ssoj$maxk<-min(soj$maxk,length(r))
+			}	
+			ssoj <- initSojDd(ssoj)
 	
+			for(g in unique(grp)){
+				gi<-grp==g
+				if(iterative){
+					for(ci in which(gi)){
+						message(sprintf("Building HSMM for seq '%s' in column '%s' ...", seqs[s], ci))				
+						if(com.emis) {
+							semis<-emis[[ci]]
+						}else {
+							if(spRle){
+								semis<-estEmis(x[,ci][[1]][r], J=J, prior.m=prior.m, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var)
+							} else {
+								semis<-estEmis(x[r,ci], J=J, prior.m=prior.m, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var)
+							}
+						}
+						if(spRle){
+							grunout<-tryCatch(hsmmRun(x[,ci][[1]][r], xid[ci], xRange[r], ssoj, semis, cMethod, maxit, maxgap,  tol, avg.m=avg.m, trim=trim, na.rm=na.rm), error=function(e){ return(e) })
+						} else {
+							grunout<-tryCatch(hsmmRun(x[r,ci], xid[ci], xRange[r], ssoj, semis, cMethod, maxit, maxgap,  tol, avg.m=avg.m, trim=trim, na.rm=na.rm), error=function(e){ return(e) }) 	
+						}
+						if(length(grep('error', class(grunout), ignore.case=T))!=0){
+							warning('Model failed for seq ', s, ' and column ', c, '.\n', grunout)
+							runout<-append(runout, list(NA))
+						} else {
+							runout<-append(runout, list(grunout)	)
+						}	
+					}
+				} else {
+					message(sprintf("Building HSMM for group '%s' ...", g))
+					if(com.emis) {
+						semis<-emis[[g]]
+					}else {
+						if(spRle){
+							stop('Rle like structure is not currently supported for mvnorm / mvt!')
+						} else {
+							semis<-estEmis(x[r,gi], J=J, prior.m=prior.m, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var)
+						}
+					}
+					grunout<-tryCatch(hsmmRun(x[r,gi], xid[gi], xRange[r], ssoj, semis, cMethod, maxit, maxgap, tol, avg.m=avg.m, trim=trim, na.rm=na.rm)	, error=function(e){ return(e) })
+					if(length(grep('error', class(grunout), ignore.case=T))!=0){
+						warning('Model failed for seq ', s, ' and group ', g, '.\n', grunout)
+						runout<-append(runout, list(NA))
+					} else {
+						runout<-append(runout, list(grunout))
+					}
+				}
+			} # end for g
+		} # end if 
+		return(runout)
+	})
+	
+	message("Building HSMM complete, preparing output ...")
+	res<-do.call(c, lapply(seq_along(seqs), function(s){
+		do.call(c, lapply(seq_len(ifelse(iterative, nc, length(unique(grp)))), function(g){
+			 if(!is.na(mcres[[s]][[g]][1])){
+			 	return(mcres[[s]][[g]]$res)
+			 } else {
+			 	return(GRanges())
+			 }
+		}))
+	}))
+	
+	seqr<-table(seqnames(xRange))
+	ssp<-do.call(rbind, lapply(seq_along(seqs), function(s){
+		do.call(cbind, lapply(seq_len(ifelse(iterative, nc, length(unique(grp)))), function(g){
+			 if(!is.na(mcres[[s]][[g]][1])){
+			 	return(DataFrame(s=mcres[[s]][[g]]$yhat, sp=mcres[[s]][[g]]$yp))
+			 } else {
+			 	return(DataFrame(s=Rle(NA, seqr[seqs[s]]), sp=Rle(NA, seqr[seqs[s]])))
+			 }
+		}))
+	}))
+	
+	emis.par<-do.call(rbind, lapply(seq_along(seqs), function(s){
+		do.call(c, lapply(seq_len(ifelse(iterative, nc, length(unique(grp)))), function(g){
+			 if(!is.na(mcres[[s]][[g]][1])){
+			 	return(list(mcres[[s]][[g]]$emispar))
+			 } else {
+			 	return(list(NA))
+			 }
+		}))
+	}))
+	rownames(emis.par)<-seqs
+	colnames(emis.par)<-if(iterative) xid else unique(grp)
+	
+	soj.par<-do.call(rbind, lapply(seq_along(seqs), function(s){
+		do.call(c, lapply(seq_len(ifelse(iterative, nc, length(unique(grp)))), function(g){
+			 if(!is.na(mcres[[s]][[g]][1])){
+			 	return(list(mcres[[s]][[g]]$sojpar))
+			 } else {
+			 	return(list(NA))
+			 }
+		}))
+	}))
+	rownames(soj.par)<-seqs
+	colnames(soj.par)<-if(iterative) xid else unique(grp)
+
 	# setup input data and state to xRange for returning
-	colnames(state)<-paste('state.',xid, sep='')
-	colnames(state.p)<-paste('state.p.',xid, sep='')
-	values(xRange)<-DataFrame(x, state, state.p, row.names = NULL)
+	values(xRange)<-DataFrame(do.call(DataFrame, lapply(seq_len(nc), function(c) x[,c])), ssp, row.names = NULL)
+	colnames(mcols(xRange)) <- c(xid, paste(rep(c('S', 'SP'), ifelse(iterative, nc, length(unique(grp)))), rep(if(iterative) xid else unique(grp), each=2), sep='.'))
 	new("biomvRCNS",  
 		x = xRange, res = res,
 		param=list(J=J, maxk=maxk, maxbp=maxbp, maxgap=maxgap, soj.type=soj.type, emis.type=emis.type, q.alpha=q.alpha, r.var=r.var, iterative=iterative, cMethod=cMethod, maxit=maxit, tol=tol, grp=grp, cluster.m=cluster.m, avg.m=avg.m, prior.m=prior.m, trim=trim, na.rm=na.rm, soj.par=soj.par, emis.par=emis.par)
@@ -204,65 +320,27 @@ biomvRhsmm<-function(x, maxk=NULL, maxbp=NULL, J=3, xPos=NULL, xRange=NULL, useP
 
 
 
-hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05, r.var=0.75, cMethod='F-B', maxit=1, maxgap=Inf, tol= 1e-6, avg.m='median', prior.m='cluster', trim=0, na.rm=TRUE){
+hsmmRun<-function(x, xid='sampleid', xRange, soj, emis, cMethod='F-B', maxit=1, maxgap=Inf, tol= 1e-6, avg.m='median', trim=0, na.rm=TRUE){
 	# now x should be a matrix, when emis.type=mvt or mvnorm, ncol>1
-	if(is.null(dim(x))) x<-matrix(x)
+	if(is.null(dim(x))) x<-matrix(as.vector(x))
 	colnames(x)<-xid
 	nr<-nrow(x)
 	J<-soj$J
 	maxk<-soj$maxk
-	
+	s<-unique(as.character(seqnames(xRange))) 
+		
 	# create default uniform initial probability
 	init<-rep(1/J, J) # start with uniform
 	# create default uniform transition probability
 	trans <- matrix(1/(J-1), nrow = J, ncol=J)
 	diag(trans)<-0
 	
-	# initialize emission parameters, either from user input or raw data
-	emis<-list(type=emis.type)
-
-	if (prior.m == 'cluster'){
-		# alternative to use clustering, and a sanity check, fall back if not there
-		if(length(find.package('cluster', quiet=T))==0) {
-			warning("'cluster' is not found, fall back to quantile method!!!")
-			prior.m <- 'quantile'
-		}
-		require(cluster)
-		xclust<-clara(x, J)
-		if(ncol(x)>1){
-			if(emis$type == 'norm' || emis$type== 'mvnorm' || emis$type == 'mvt') {
-				emis$var<-lapply(order(xclust$medoids), function(j) cov(x[xclust$clustering==j,]))
-			} 
-			emis$mu<-lapply(order(xclust$medoids), function(j) xclust$medoids[j,])
-		} else {
-			if(emis$type == 'norm' || emis$type== 'mvnorm' || emis$type == 'mvt') {
-				emis$var<-sapply(order(xclust$medoids), function(j) var(x[xclust$clustering==j,]))
-				emis$var[is.na(emis$var)]<-mean(emis$var[!is.na(emis$var)])
-			}
-			emis$mu<-as.numeric(xclust$medoids)[order(xclust$medoids)]
-		}	
-	}
-	
-	# old quantile method
-	if(prior.m == 'quantile'){
-		emis$mu <- estEmisMu(x, J, q.alpha=q.alpha)
-		if(emis$type == 'norm' || emis$type== 'mvnorm' || emis$type == 'mvt') {
-			emis$var <- estEmisVar(x, J, r.var=r.var)
-		}
-	}	
-	if (emis$type == 'nbinom'){
-		emis$size <- rep(estimateSegCommonDisp(x), J) # common prior
-	}
-	if (emis$type == 't' || emis$type == 'mvt'){
-		emis$df <- rep(1, J) # common prior
-	}
-
 	#estimation of most likely state sequence
 	#define likelihood
 	ll <- rep(NA,maxit)
 	# start MM iteration
 	for(it in 1:maxit) {
-		cat('iteration: ', it, '\n')
+		message(sprintf("[ hsmmRun ] seq '%s' column '%s' iteration: %d", s, paste(xid, collapse='+'), it))
 		# reestimationg of emmision   
 		emis<-initEmis(emis=emis, x=x)
 		B  = .C("backward", a=as.double(trans), pi=as.double(init), b=as.double(emis$p), d=as.double(soj$d), D=as.double(soj$D),
@@ -285,7 +363,7 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
 		# update sojourn dD, using B$eta
 		soj<-initSojDd(soj=soj, B=B)
 		
-		# loglikelihood for this it, using B$N
+		# log-likelihood for this it, using B$N
 		ll[it]<-sum(log(B$N))
 		if( it>1 && abs(ll[it]-ll[it-1]) < tol) {
 			break()	
@@ -311,16 +389,16 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
           maxk=as.integer(maxk), DL=as.integer(nrow(soj$d)), T=as.integer(nr), J=as.integer(J), 
           alpha = double(nr*J), shat=integer(nr), si=double(nr*J), opt=integer(nr*J), ops=integer(nr*J), PACKAGE='biomvRCNS')
         yhat<-V$shat+1
-        yp<-V$alpha[(yhat-1)*nr+1:nr]      
+        yp<-Rle(V$alpha[(yhat-1)*nr+1:nr])
 	} else if (cMethod=='F-B'){
 		## assign states and split if necessary.
 		yhat<-apply(matrix(B$L,ncol=J),1,which.max)
-		yp<-B$L[(yhat-1)*nr+1:nr]      
+		yp<-Rle(B$L[(yhat-1)*nr+1:nr])
 	}
 	if(!is.null(soj$fttypes)){
 		yhat<-soj$fttypes[yhat]
 	}
-	yhat<-as.character(yhat)
+	yhat<-Rle(as.character(yhat))
 	# setup this new res gr
 	Ilist<-lapply(unique(yhat), function(j) do.call(cbind, splitFarNeighbouryhat(yhat, xRange=xRange, maxgap=maxgap, state=j)))
 	names(Ilist)<-unique(yhat)
@@ -329,9 +407,9 @@ hsmmRun<-function(x, xid='sampleid', xRange, soj, emis.type='norm', q.alpha=0.05
 						GRanges(seqnames=as.character(seqnames(xRange)[1]), 
 							IRanges(start=rep(start(xRange)[Ilist[[j]][,'IS']], length(xid)), end=rep(end(xRange)[Ilist[[j]][,'IE']], length(xid))), 
 							strand=rep(strand(xRange)[Ilist[[j]][,'IS']], length(xid)), 
-							SAMPLE=rep(xid, each=nrow(Ilist[[j]])), 
-							STATE=rep(as.character(j), nrow(Ilist[[j]])*length(xid)), 
-							AVG=as.numeric(sapply(xid, function(s) apply(Ilist[[j]], 1, function(r) apply(as.matrix(x[r[1]:r[2],s]), 2, avgFunc, avg.m=avg.m, trim=trim, na.rm=na.rm))))
+							SAMPLE=Rle(xid, rep(nrow(Ilist[[j]]), length(xid))), 
+							STATE=Rle(as.character(j), nrow(Ilist[[j]])*length(xid)), 
+							AVG=Rle(as.numeric(sapply(xid, function(s) apply(Ilist[[j]], 1, function(r) apply(as.matrix(x[r[1]:r[2],s]), 2, avgFunc, avg.m=avg.m, trim=trim, na.rm=na.rm)))))
 						)
 					)
 			)
@@ -375,7 +453,7 @@ unifMJ<-function(M,J, ints=NULL){
 sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){ 
 	# xAnno has to be a Grange / rangedata obj
 	# check if xAnno class, txdb or dataframe or rangedata ...
-	# there is also the possiblity of proposing an emperical number for the states.
+	# there is also the possibility of proposing an empirical number for the states.
 	# must ensure there are at least 2 for each state ? todo
 		
 	if(class(xAnno) == 'TranscriptDb') {   
@@ -392,7 +470,7 @@ sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){
 		
 		# gaps() will by default produce extra * ranges and full range for empty chr
 		# https://stat.ethz.ch/pipermail/bioconductor/2013-May/052976.html
-		intergenic[strand(intergenic)!='*']
+		intergenic<-intergenic[strand(intergenic)!='*']
 		intergenic<-intergenic[which(width(intergenic) != seqlengths(intergenic)[as.character(seqnames(intergenic))])]
 		
 		exon <- exons(xAnno) # this give you all exon ranges ungroupped
@@ -478,7 +556,6 @@ sojournAnno<-function(xAnno, soj.type= 'gamma', pbdist=NULL){
 		}
 		soj<-append(soj, list(lambda=unname(lambda), shift=unname(shift)) )			
 	}
-
 	#return soj object
 	return(soj)
 }
@@ -554,7 +631,7 @@ initSojDd <- function(soj, B=NULL) {
 		
 	}  else if (soj$type == "nbinom") {
 		if(!is.null(B)){
-			# then this is a update run, reestimation of dist params
+			# then this is a update run, re-estimation of dist params
 			soj$d <- matrix(B$eta+.Machine$double.eps,ncol=J)
 			soj$shift <- soj$size <- soj$mu <- numeric(J)    
 			
@@ -587,8 +664,43 @@ initSojDd <- function(soj, B=NULL) {
 }
 
 
-
-
+##################################################
+# to estimate emission par
+##################################################
+estEmis<-function(x, J=3, prior.m='quantile', emis.type='norm', q.alpha=0.05, r.var=0.75){
+	if(is.null(dim(x))) x<-matrix(as.vector(x))
+	emis<-list(type=emis.type)
+	if (prior.m == 'cluster'){
+		xclust<-clara(x, J)
+		if(ncol(x)>1){
+			if(emis$type == 'norm' || emis$type== 'mvnorm' || emis$type == 'mvt') {
+				emis$var<-lapply(order(xclust$medoids[,1]), function(j) cov(x[xclust$clustering==j,]))
+			} 
+			emis$mu<-lapply(order(xclust$medoids[,1]), function(j) xclust$medoids[j,])
+		} else {
+			if(emis$type == 'norm' || emis$type== 'mvnorm' || emis$type == 'mvt') {
+				emis$var<-sapply(order(xclust$medoids), function(j) var(x[xclust$clustering==j,]))
+				emis$var[is.na(emis$var)]<-mean(emis$var[!is.na(emis$var)])
+			}
+			emis$mu<-as.numeric(xclust$medoids)[order(xclust$medoids)]
+		}	
+	}
+	
+	# old quantile method
+	if(prior.m == 'quantile'){
+		emis$mu <- estEmisMu(x, J, q.alpha=q.alpha)
+		if(emis$type == 'norm' || emis$type== 'mvnorm' || emis$type == 'mvt') {
+			emis$var <- estEmisVar(x, J, r.var=r.var)
+		}
+	}	
+	if (emis$type == 'nbinom'){
+		emis$size <- rep(nbinomCLLDD(x)$par[1], J) # common prior
+	}
+	if (emis$type == 't' || emis$type == 'mvt'){
+		emis$df <- rep(1, J) # common prior
+	}
+	return(emis)
+}
 
 ##################################################
 # to estimate segment wise mean vector/list
@@ -613,8 +725,8 @@ estEmisMu<- function(x, J, q.alpha=0.05, na.rm=TRUE){
 # to estimate segment wise variance vector / covariance matrix list
 ##################################################
 estEmisVar<-function(x, J=3, na.rm=TRUE, r.var=0.75){
-	# r.var is the espected ratio of variance for state 1 and J versus any intermediate states
-	# a value larger than 1 tend to give more extreme states;  a value smaller than 1 will decrease the probablity of having extreme state, pushing it to the center.
+	# r.var is the expected ratio of variance for state 1 and J versus any intermediate states
+	# a value larger than 1 tend to give more extreme states;  a value smaller than 1 will decrease the probability of having extreme state, pushing it to the center.
 	nc<-ncol(x)
 	f.var<-rep(ifelse(r.var>=1, 1, r.var), J)
 	if(J%%2 == 1) {
@@ -638,7 +750,7 @@ estEmisVar<-function(x, J=3, na.rm=TRUE, r.var=0.75){
 	return(ret)
 }
 ##################################################
-# initialize and update emission probablity
+# initialize and update emission probability
 ##################################################
 initEmis<-function(emis, x, B=NULL){
 	if(is.null(B)){
@@ -659,7 +771,7 @@ initEmis<-function(emis, x, B=NULL){
 		}
 		emis$p<-emis$p/rowSums(emis$p) # normalized
 	} else {
-		# then this is for the re-restimation of emis param
+		# then this is for the re-estimation of emis param
 		J<-B$J
 		BL<-matrix(B$L,ncol=J)
 		BL<-t(apply(BL, 1, function(x) abs(x)/sum(abs(x))))
@@ -697,8 +809,8 @@ initEmis<-function(emis, x, B=NULL){
 	return(emis)
 }	
 
-splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=NULL){
-	yhatrle<-Rle(yhat)
+splitFarNeighbouryhat<-function(yhatrle, xPos=NULL, xRange=NULL, maxgap=Inf, state=NULL){
+#	yhatrle<-Rle(yhat)
 	rv<-runValue(yhatrle)
 	rl<-runLength(yhatrle)
 	ri<-which(rv==as.character(state))
@@ -708,7 +820,7 @@ splitFarNeighbouryhat<-function(yhat, xPos=NULL, xRange=NULL, maxgap=Inf, state=
 	if(length(intStart)>0 && !is.null(maxgap) && !is.null(xPos) || !is.null(xRange)){
 		tmp<-splitFarNeighbour(intStart=intStart, intEnd=intEnd, xPos=xPos, xRange=xRange, maxgap=maxgap)
 		intStart<-tmp$IS
-		intEnd<-tmp$IE		
+		intEnd<-tmp$IE
 	}
 	return(list(IS=intStart, IE=intEnd))
 }
