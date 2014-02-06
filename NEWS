@@ -1,0 +1,130 @@
+CHANGES IN VERSION 1.3.2
+-------------------------
+
+BUG FIXES
+
+    o fix the returned posterior p
+
+CHANGES IN VERSION 1.1.9
+-------------------------
+
+BUG FIXES
+
+    o NA bug when model fails
+    o using the length of the segment if shorter than maxk
+
+CHANGES IN VERSION 1.1.8
+-------------------------
+
+NEW FEATURES
+
+    o add error catching in biomvRhsmm
+    o updates in package vignette
+    
+BUG FIXES
+
+    o fine tuning of memory usage for large count data structure
+    o minor bug fixes
+
+CHANGES IN VERSION 1.1.7
+-------------------------
+
+NEW FEATURES
+
+    o add support of Rle like sparse data in mcols of large count data structure.
+    o add mclapply for parallel processing of different seqnames in biomvRhsmm
+
+
+CHANGES IN VERSION 1.1.6
+-------------------------
+    
+BUG FIXES
+
+    o fix nbinom emis estimateSegCommonDisp -> nbinomCLLDD
+
+CHANGES IN VERSION 1.1.5
+-------------------------
+
+NEW FEATURES
+
+    o update biomvRGviz to have trackList returned when tofile=FALSE
+    
+BUG FIXES
+
+    o typo fix in function argument
+    
+CHANGES IN VERSION 1.1.4
+-------------------------
+
+NEW FEATURES
+
+    o update biomvRGviz to plot multiple samples in one, and more param
+    o plot method now defaults to multiple samples in one, sampleInOne=T
+    
+BUG FIXES
+
+    o fix states rank when prior.m=cluster 
+
+CHANGES IN VERSION 1.1.3
+-------------------------
+
+NEW FEATURES
+
+    o the x slot in the returning object for biomvRhsmm now also contains the probability of associated state for each position
+    o the param slot in the returning object for biomvRhsmm now also contains the updated emission and sojourn parameters for each seqname and sample column
+ 
+CHANGES IN VERSION 1.1.2
+-------------------------
+
+NEW FEATURES
+
+    o add a new clustering method for emission prior estimation
+    o add a new example section of DMR detection in the vignette
+    
+BUG FIXES
+
+    o switch off several data checking warnings, use normal cat() instead
+
+CHANGES IN VERSION 1.1.1
+-------------------------
+
+NEW FEATURES
+
+    o add support of direct input of sojourn parameters as named list.
+    
+BUG FIXES
+
+    o suppress warnings generated when appending GRanges object for the output
+
+CHANGES IN VERSION 0.99.3
+-------------------------
+
+NEW FEATURES
+
+    o add mvt and t to the emis.type and tmvtFit function
+
+BUG FIXES
+
+    o fix shift index (-1) in pois and nbinom fitting	    
+
+CHANGES IN VERSION 0.99.2
+-------------------------
+
+NEW FEATURES
+
+    o add log-Vertibi in c
+    
+    o add normalizing factor for estimation of emis$p and soj$d
+
+    o add avgFunc to be used in average calculation, median and mean with trim, default to median
+
+BUG FIXES
+
+    o fix shift index (-1) in pois and nbinom fitting	
+	
+CHANGES IN VERSION 0.99.1
+-------------------------
+
+NEW FEATURES
+
+    o in Bioc-devel
